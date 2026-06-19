@@ -2,7 +2,7 @@
 
 Run [OpenAI Codex](https://developers.openai.com/codex/overview) against [Amazon Bedrock](https://aws.amazon.com/bedrock/) with enterprise-grade identity, optional quota enforcement, and optional observability.
 
-This guidance provides two deployment patterns — choose the one that matches your organization's needs for budget enforcement.
+This guidance provides three deployment patterns — choose the one that matches your organization's needs for ops effort and budget enforcement.
 
 ---
 
@@ -15,46 +15,56 @@ Question 1: Do you need HARD quota enforcement?
 (Blocking requests when users hit limits, not just alerts)
 
 ├── YES → LLM Gateway
-│         Why: IAM Identity Center (IdC) cannot block requests mid-session
+│         Why: hard per-user/per-team budgets + rate limiting are gateway-native;
+│         IdC and AgentCore Gateway do not block requests mid-session
 │
-└── NO → Question 2: Already use AWS IAM Identity Center (IdC)?
+└── NO → Question 2: Want a fully managed gateway — multi-provider routing,
+         Bedrock Guardrails, AWS-private web search — with no infra to operate?
 
-          ├── YES → Native AWS Access
-          │         (Fastest: 5 min setup)
+          ├── YES → AgentCore Gateway
+          │         (~10 min; managed/serverless; soft controls only)
           │
-          └── NO → Choose one:
+          └── NO → Question 3: Already use AWS IAM Identity Center (IdC)?
 
-                    Option A: Native AWS Access (Set up IdC + SAML)
-                    • Pro: Native AWS integration
-                    • Con: 30-60 min one-time setup
+                    ├── YES → Native AWS Access
+                    │         (Fastest: 5 min; native per-user attribution)
+                    │
+                    └── NO → Choose one:
 
-                    Option B: LLM Gateway (Use Gateway + OIDC)
-                    • Pro: 15 min setup, no IdC needed
-                    • Con: Additional infrastructure required
+                              Option A: Native AWS Access (Set up IdC + SAML)
+                              • Pro: native AWS integration, per-user CloudTrail/CUR
+                              • Con: 30-60 min one-time setup
+
+                              Option B: AgentCore Gateway (Gateway + OIDC)
+                              • Pro: ~10 min, managed, guardrails + web search
+                              • Con: no hard budgets / per-user cost attribution
 ```
 
 **Key Decision Factors:**
 
-1. **Hard quotas require Gateway** — IdC issues credentials directly to users; AWS cannot revoke them mid-session
-2. **If you have IdC already** — Native AWS Access is fastest (5 minutes)
-3. **If you don't have IdC** — Choose between setting up IdC (native AWS integration) vs. Gateway (faster setup)
+1. **Hard quotas require the LLM Gateway** — IdC issues credentials directly to users (AWS cannot revoke them mid-session), and AgentCore Gateway provides only soft/RPM controls, not hard per-user/per-team budgets
+2. **AgentCore Gateway = managed, minimal ops** — a fully managed gateway with multi-provider routing, content guardrails, and AWS-private web search, but no per-user cost attribution
+3. **If you have IdC already** — Native AWS Access is fastest (5 minutes) and keeps native per-user attribution in CloudTrail/CUR
 
 ---
 
 ## Pattern Comparison
 
-| Capability | Native AWS Access | LLM Gateway |
-|------------|-------------------|------------------|
-| **Authentication** | SAML → IdC | OIDC → Gateway |
-| **IAM Identity Center Required?** | ✅ Yes | ❌ No |
-| **Path to Bedrock** | Codex → Bedrock (native AWS SDK) | Codex → Gateway → Bedrock |
-| **Developer Command** | `aws sso login` | `export OPENAI_API_KEY=...` |
-| **Per-user Bedrock CloudTrail / CUR** | ✅ Native | ❌ Gateway role only |
-| **Hard Budget Limits** | ❌ No | ✅ Provided by gateway |
-| **Per-team Quotas** | ❌ No | ✅ Provided by gateway |
-| **Rate Limiting (RPM/TPM)** | ❌ No | ✅ Provided by gateway |
-| **Model Routing/Fallback** | ❌ No | ✅ Provided by gateway |
-| **Setup Time** | 5-60 min | 15 min |
+| Capability | Native AWS Access | AgentCore Gateway | LLM Gateway |
+|------------|-------------------|-------------------|-------------|
+| **Authentication** | SAML → IdC | OIDC bearer → Gateway (`CUSTOM_JWT`) | OIDC → Gateway |
+| **IAM Identity Center Required?** | ✅ Yes | ❌ No | ❌ No |
+| **Path to Bedrock** | Codex → Bedrock (native AWS SDK) | Codex → managed gateway → Bedrock | Codex → self-run gateway → Bedrock |
+| **Infra you operate** | None | None (managed/serverless) | ECS + RDS + ALB |
+| **Developer Command** | `aws sso login` | `export AGENTCORE_TOKEN=<oidc-jwt>` | `export OPENAI_API_KEY=...` |
+| **Per-user Bedrock CloudTrail / CUR** | ✅ Native | ❌ Gateway role only | ❌ Gateway role only |
+| **Hard Budget Limits** | ❌ No | ❌ No (not built-in) | ✅ Provided by gateway |
+| **Per-team Quotas** | ❌ No | ❌ No (not built-in) | ✅ Provided by gateway |
+| **Rate Limiting (RPM/TPM)** | ❌ No | ⚠️ RPM throttle only | ✅ Provided by gateway |
+| **Model Routing/Fallback** | ❌ No | ✅ Multi-provider (Bedrock/OpenAI/Anthropic) | ✅ Provided by gateway |
+| **Content Guardrails** | ❌ No | ✅ Bedrock Guardrails + Policy | ❌ No |
+| **AWS-managed web search** | ❌ No | ✅ MCP tool | ❌ No |
+| **Setup Time** | 5-60 min | ~10 min | 15 min |
 
 > **Quota enforcement is gateway-native, not extra AWS infrastructure.**
 > Hard budgets, per-user / per-team quotas, and RPM/TPM rate limits are
@@ -220,6 +230,7 @@ with `aws bedrock list-foundation-models --region <region>`.
 ### Getting Started
 - **[Choose Your Pattern](#choose-your-pattern)** — Decision tree (start here)
 - **[docs/QUICKSTART_NATIVE_AWS_ACCESS.md](docs/QUICKSTART_NATIVE_AWS_ACCESS.md)** — Native AWS Access deployment
+- **[docs/QUICKSTART_AGENTCORE_GATEWAY.md](docs/QUICKSTART_AGENTCORE_GATEWAY.md)** — AgentCore Gateway deployment (managed; inference + web search)
 - **[docs/QUICKSTART_LLM_GATEWAY.md](docs/QUICKSTART_LLM_GATEWAY.md)** — LLM Gateway deployment
 
 ### Architecture & Deployment
