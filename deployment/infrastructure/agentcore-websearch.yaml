@@ -1,0 +1,106 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Codex-on-Bedrock — AgentCore Gateway with the managed Web Search MCP tool.
+  Creates the gateway service role, a CUSTOM_JWT gateway, and the web-search
+  connector target. Codex's MCP client calls the tool with an OIDC bearer token
+  (no proxy). Region us-east-1 only (web search connector availability).
+
+Parameters:
+  DiscoveryUrl:
+    Type: String
+    Description: >
+      OIDC discovery URL of your IdP (…/.well-known/openid-configuration).
+      Create the IdP first — e.g. an Amazon Cognito user pool with a
+      client-credentials app client. This template does not create the IdP.
+  AllowedClient:
+    Type: String
+    Description: >
+      OIDC client id allowed to call the gateway (matched against the JWT's
+      client_id claim). Cognito M2M access tokens carry client_id, not aud.
+  GatewayName:
+    Type: String
+    Default: codex-agentcore-websearch-gw
+    Description: Name for the AgentCore gateway.
+
+Resources:
+  GatewayRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${GatewayName}-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: GatewayAssumeRolePolicy
+            Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: codex-agentcore-web-search
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: InvokeGateway
+                Effect: Allow
+                Action: bedrock-agentcore:InvokeGateway
+                Resource: !Sub 'arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:gateway/*'
+              # InvokeWebSearch is authorized per-request against the service-owned
+              # tool ARN. Without it, tools/list works but tools/call fails with
+              # "Execution role is not authorized for connector web-search".
+              - Sid: InvokeWebSearch
+                Effect: Allow
+                Action: bedrock-agentcore:InvokeWebSearch
+                Resource: !Sub 'arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:aws:tool/web-search.v1'
+      Tags:
+        - { Key: Project, Value: codex-on-bedrock }
+        - { Key: Pattern, Value: agentcore-gateway }
+
+  Gateway:
+    Type: AWS::BedrockAgentCore::Gateway
+    Properties:
+      Name: !Ref GatewayName
+      Description: Codex-on-Bedrock gateway, AgentCore web search MCP tool
+      RoleArn: !GetAtt GatewayRole.Arn
+      ProtocolType: MCP
+      ProtocolConfiguration:
+        Mcp:
+          SupportedVersions:
+            - '2025-06-18'
+      AuthorizerType: CUSTOM_JWT
+      AuthorizerConfiguration:
+        CustomJWTAuthorizer:
+          DiscoveryUrl: !Ref DiscoveryUrl
+          AllowedClients:
+            - !Ref AllowedClient
+
+  WebSearchTarget:
+    Type: AWS::BedrockAgentCore::GatewayTarget
+    Properties:
+      GatewayIdentifier: !GetAtt Gateway.GatewayIdentifier
+      Name: web-search-tool
+      Description: AgentCore managed web search (MCP tool)
+      TargetConfiguration:
+        Mcp:
+          Connector:
+            Source:
+              ConnectorId: web-search
+            Configurations:
+              - Name: WebSearch
+                # Optional server-side domain denylist (hidden from the model):
+                # ParameterValues: { domainFilter: { exclude: ["blocked.com"] } }
+                ParameterValues: {}
+      CredentialProviderConfigurations:
+        - CredentialProviderType: GATEWAY_IAM_ROLE
+
+Outputs:
+  GatewayId:
+    Description: AgentCore gateway id
+    Value: !GetAtt Gateway.GatewayIdentifier
+  McpEndpoint:
+    Description: MCP endpoint — set as mcp_servers.<name>.url in ~/.codex/config.toml
+    Value: !GetAtt Gateway.GatewayUrl
+  GatewayRoleArn:
+    Value: !GetAtt GatewayRole.Arn
