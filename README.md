@@ -4,29 +4,34 @@ Production-ready deployment patterns for running [OpenAI Codex](https://develope
 
 ---
 
-## Two Deployment Patterns
+## Three Deployment Patterns
 
 ```text
 Need hard quota enforcement? (Block requests when limits hit)
 │
 ├── YES → LLM Gateway
 │
-└── NO → Already use AWS IAM Identity Center?
+└── NO → Want a fully managed gateway (multi-provider routing, content
+         guardrails, AWS-private web search) with no infra to run?
           │
-          ├── YES → Native AWS Access
+          ├── YES → AgentCore Gateway
           │
-          └── NO → Choose:
-                    Native AWS Access (set up IdC) OR LLM Gateway
+          └── NO → Already use AWS IAM Identity Center?
+                    │
+                    ├── YES → Native AWS Access
+                    │
+                    └── NO → Native AWS Access (set up IdC) OR AgentCore Gateway
 ```
 
 | Pattern | Setup Time | Telemetry | Best For |
 |---------|------------|-----------|----------|
-| **[Native AWS Access](docs/QUICKSTART_NATIVE_AWS_ACCESS.md)** | 5–60 min | Optional Codex-side OTel | Teams with IdC, soft monitoring OK |
-| **[LLM Gateway](docs/QUICKSTART_LLM_GATEWAY.md)** | 15 min | Provided by the gateway | Hard budgets, rate limiting |
+| **[Native AWS Access](docs/QUICKSTART_NATIVE_AWS_ACCESS.md)** | 5–60 min | Optional Codex-side OTel | Teams with IdC, native per-user attribution, soft monitoring OK |
+| **[AgentCore Gateway](docs/QUICKSTART_AGENTCORE_GATEWAY.md)** | ~10 min | CloudWatch `AWS/BedrockMantle` | Managed gateway, guardrails, AWS-private web search, minimal ops |
+| **[LLM Gateway](docs/QUICKSTART_LLM_GATEWAY.md)** | 15 min | Provided by the gateway | Hard budgets, rate limiting, per-user spend |
 
-Both patterns include:
+All patterns include:
 - Corporate SSO (Okta, Azure AD, Auth0, AWS IAM Identity Center)
-- Per-user CloudTrail audit trails
+- Per-user CloudTrail audit trails (Native AWS Access; gateway patterns attribute via gateway telemetry)
 - One-command authentication
 - Cross-platform support (Windows, macOS, Linux)
 - CloudFormation templates for one-command infrastructure deployment
@@ -35,6 +40,7 @@ Both patterns include:
 
 - **Overview & decision guide** → [QUICKSTART.md](QUICKSTART.md)
 - **Native AWS Access** → [Quickstart](docs/QUICKSTART_NATIVE_AWS_ACCESS.md)
+- **AgentCore Gateway** → [Quickstart](docs/QUICKSTART_AGENTCORE_GATEWAY.md)
 - **LLM Gateway** → [Quickstart](docs/QUICKSTART_LLM_GATEWAY.md)
 
 ## Documentation

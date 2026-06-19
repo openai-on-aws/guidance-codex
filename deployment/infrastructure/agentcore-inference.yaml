@@ -1,0 +1,114 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Codex-on-Bedrock — AgentCore Gateway for GPT-5.x inference via the bedrock-mantle
+  connector. Creates the gateway service role and a CUSTOM_JWT gateway. NOTE: the
+  inference *target* is not yet expressible in CloudFormation (the
+  AWS::BedrockAgentCore::GatewayTarget schema currently exposes only Mcp/Http
+  target configurations, not Inference), so it is added with one documented CLI
+  call after this stack deploys — see Outputs and docs/QUICKSTART_AGENTCORE_GATEWAY.md.
+
+Parameters:
+  DiscoveryUrl:
+    Type: String
+    Description: OIDC discovery URL of your IdP (…/.well-known/openid-configuration). Create the IdP first.
+  AllowedClient:
+    Type: String
+    Description: OIDC client id allowed to call the gateway (matched against the JWT's client_id claim).
+  GatewayName:
+    Type: String
+    Default: codex-agentcore-inference-gw
+    Description: Name for the AgentCore gateway.
+
+Resources:
+  GatewayRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${GatewayName}-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: GatewayAssumeRolePolicy
+            Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: codex-agentcore-bedrock-mantle
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: BedrockInvoke
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:Converse
+                  - bedrock:ConverseStream
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/*'
+                  - !Sub 'arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*'
+                  - !Sub 'arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:application-inference-profile/*'
+              # GPT-5.x via the Bedrock Mantle Responses endpoint. ListModels is
+              # REQUIRED — the inference connector discovers its model list at target
+              # creation; without it the target goes FAILED with HTTP 401. Do NOT add
+              # an aws:RequestedRegion condition: these calls don't populate that key,
+              # so the condition would cause an implicit deny.
+              - Sid: BedrockMantleInvoke
+                Effect: Allow
+                Action:
+                  - bedrock-mantle:CallWithBearerToken
+                  - bedrock-mantle:CreateInference
+                  - bedrock-mantle:GetInference
+                  - bedrock-mantle:ListModels
+                Resource: '*'
+              - Sid: ListBedrockResources
+                Effect: Allow
+                Action:
+                  - bedrock:ListFoundationModels
+                  - bedrock:ListInferenceProfiles
+                  - bedrock:GetFoundationModel
+                  - bedrock:GetInferenceProfile
+                Resource: '*'
+      Tags:
+        - { Key: Project, Value: codex-on-bedrock }
+        - { Key: Pattern, Value: agentcore-gateway }
+
+  Gateway:
+    Type: AWS::BedrockAgentCore::Gateway
+    Properties:
+      Name: !Ref GatewayName
+      Description: Codex-on-Bedrock gateway, bedrock-mantle inference target
+      RoleArn: !GetAtt GatewayRole.Arn
+      ProtocolType: MCP
+      ProtocolConfiguration:
+        Mcp:
+          SupportedVersions:
+            - '2025-06-18'
+      AuthorizerType: CUSTOM_JWT
+      AuthorizerConfiguration:
+        CustomJWTAuthorizer:
+          DiscoveryUrl: !Ref DiscoveryUrl
+          AllowedClients:
+            - !Ref AllowedClient
+
+Outputs:
+  GatewayId:
+    Description: AgentCore gateway id
+    Value: !GetAtt Gateway.GatewayIdentifier
+  AddInferenceTargetCommand:
+    Description: >
+      Run this once after the stack deploys to add the bedrock-mantle inference
+      target (CloudFormation cannot yet express Inference target configurations).
+    Value: !Sub >-
+      aws bedrock-agentcore-control create-gateway-target --region ${AWS::Region}
+      --gateway-identifier ${Gateway.GatewayIdentifier} --name bedrock-mantle
+      --target-configuration '{"inference":{"connector":{"source":{"connectorId":"bedrock-mantle"}}}}'
+      --credential-provider-configurations '[{"credentialProviderType":"GATEWAY_IAM_ROLE"}]'
+  InferenceBaseUrl:
+    Description: base_url for ~/.codex/config.toml (model_providers.<name>.base_url)
+    Value: !Sub
+      - 'https://${GwHost}/inference/v1'
+      - GwHost: !Select [2, !Split ['/', !GetAtt Gateway.GatewayUrl]]
