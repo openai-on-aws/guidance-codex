@@ -301,6 +301,26 @@ Codex reads `~/.codex/config.toml`, picks up the `amazon-bedrock` provider, and 
 
 ---
 
+## Daily use
+
+After the one-time setup above, the everyday loop is two steps:
+
+```bash
+aws sso login --profile codex-bedrock   # once per session (browser → corporate IdP); skip if token still valid
+codex                                    # use Codex normally — SigV4 is automatic
+```
+
+- **How often you sign in:** once per IdC session — 8 hours by default (raisable to
+  12h on the permission set). Within that window you just run `codex`; the AWS SDK
+  loads cached credentials automatically.
+- **When the session expires:** Codex fails with a credentials error mid-run. Fix:
+  re-run `aws sso login --profile codex-bedrock` and continue. There is no AWS IAM
+  user and nothing to rotate — re-auth is always against your corporate IdP.
+- **Nothing to refresh manually:** Codex + the AWS SDK manage credential loading and
+  expiry from the profile; you only re-run `aws sso login` when prompted.
+
+---
+
 ## Validation
 
 ### Test Authentication

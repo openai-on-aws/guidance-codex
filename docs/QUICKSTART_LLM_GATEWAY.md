@@ -143,6 +143,25 @@ codex exec "Hello world"
 
 For advanced configuration, see [OpenAI Codex documentation](https://developers.openai.com/codex/config-advanced).
 
+### Daily use
+
+After setup, the everyday loop is just:
+
+```bash
+export OPENAI_API_KEY=<your-gateway-key-or-oidc-token>   # if not already in your shell profile
+codex exec "..."                                          # Codex forwards it as the bearer
+```
+
+- **Static gateway API key** (e.g. a LiteLLM-issued `sk-…`): set it once in your
+  shell profile; it lasts until the admin rotates or revokes it — no per-session step.
+- **OIDC/JWT to the gateway:** the token is short-lived. For hands-off refresh, point
+  the provider at a token-fetch `auth` command (`[model_providers.<name>.auth]` with
+  `command` + `refresh_interval_ms`) — Codex runs it and refreshes automatically. With
+  a static `env_key` token instead, Codex does not refresh: on a 401, re-mint and
+  re-run.
+- **No AWS credentials on the developer machine** — the gateway holds the Bedrock (or
+  Mantle) credentials and refreshes upstream tokens server-side.
+
 On this path, Bedrock CloudTrail and CUR attribute requests to the gateway IAM
 role. For per-user or per-team reporting, rely on the gateway's own telemetry
 and spend logs.

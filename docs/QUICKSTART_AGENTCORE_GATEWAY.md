@@ -29,9 +29,24 @@ budgets, per-user cost attribution, or per-tenant TPM enforcement. See
 The gateway is created with a **`CUSTOM_JWT`** authorizer pointed at your OIDC
 IdP's discovery URL. Codex's custom providers authenticate with a plain bearer
 token, and the gateway validates that token as an OIDC JWT — so **Codex talks to
-the gateway directly, with no signing proxy and no new credential mechanism.**
-The bearer is the same kind of OIDC token the repo's other patterns already
-issue (e.g. via `aws-oidc-auth`).
+the gateway directly, with no signing proxy and no client binary.** The bearer is
+a standard OIDC token from your IdP (Cognito / Okta / Entra ID / Auth0).
+
+> **Who authenticates whom.** On this path **your IdP issues the token; Codex
+> presents it.** You choose how Codex obtains that token, and the choice decides
+> whether refresh is automatic (verified against the Codex source and live):
+>
+> - **`env_key` (manual).** Codex reads a static token from an env var and forwards
+>   it. It does **not** refresh — on expiry the gateway returns 401 and you re-mint
+>   and re-run. Simplest to start with.
+> - **`auth` command (auto-refresh, recommended).** Point the provider at a small
+>   token-fetch command; Codex runs it itself, caches the token for
+>   `refresh_interval_ms`, and **re-runs it to refresh** — no manual step, no 401
+>   loop. Verified live: with no token in the environment, Codex invoked the command
+>   and authenticated. See [Daily use](#daily-use).
+>
+> (The native `amazon-bedrock` provider is different again — Codex authenticates via
+> the AWS credential chain / SigV4.)
 
 This was verified end-to-end: a real `codex exec` turn reached the gateway with
 only `Authorization: Bearer <jwt>`, streamed a response, and emitted telemetry.
@@ -130,10 +145,16 @@ aws cloudformation describe-stacks --region us-east-1 \
 
 ## Step 3: Get a token and point Codex at it
 
-The deploy script's output gives you both, filled in for your gateway. The shape:
+Codex authenticates to the gateway with an **OIDC bearer token from your IdP** —
+the developer needs **no AWS account, no IAM user, and no AWS credentials.** Their
+corporate identity (EntraID / Okta / Auth0 / Cognito) is the only thing AWS trusts,
+via the gateway's `CUSTOM_JWT` authorizer. See
+[Obtaining & refreshing your token](#obtaining--refreshing-your-token) below for the
+full per-IdP flow and how refresh works.
+
+Quick version — fetch a token into `AGENTCORE_TOKEN` (Cognito M2M shown):
 
 ```bash
-# fetch a bearer token from your IdP (Cognito client-credentials shown)
 export AGENTCORE_TOKEN=$(curl -s -X POST \
   "https://<your-cognito-domain>.auth.us-east-1.amazoncognito.com/oauth2/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
@@ -157,6 +178,152 @@ wire_api = "responses"
 ```bash
 codex exec "What is 17 multiplied by 23?"
 ```
+
+---
+
+## Daily use
+
+Pick one of two token strategies. **Both are verified end-to-end against a live
+gateway.**
+
+### Option A — `auth` command (recommended: Codex auto-refreshes)
+
+Point the provider at a small command that prints a fresh OIDC token to stdout.
+Codex runs it itself, caches the token for `refresh_interval_ms`, and re-runs it to
+refresh — so the everyday loop is just `codex`, with **no token export and no 401
+loop.**
+
+```toml
+[model_providers.agentcore-gateway]
+name     = "AgentCore Gateway (bedrock-mantle)"
+base_url = "https://<gateway-id>.gateway.bedrock-agentcore.us-east-1.amazonaws.com/inference/v1"
+wire_api = "responses"
+
+[model_providers.agentcore-gateway.auth]
+command = "/path/to/fetch-token.sh"   # prints the access_token to stdout
+refresh_interval_ms = 300000          # Codex re-runs the command when this elapses
+```
+
+`fetch-token.sh` is any script that emits the raw `access_token` (the per-IdP
+`curl` from [Obtaining & refreshing your token](#obtaining--refreshing-your-token),
+piped to extract `access_token`). Then daily use is simply:
+
+```bash
+codex exec "..."   # Codex invokes fetch-token.sh on its own and refreshes on interval
+```
+
+> Verified live: with **no** token in the environment, Codex invoked the command and
+> authenticated to the gateway. `auth` and `env_key` are mutually exclusive — use one.
+> (Note: this `auth`-command auto-refresh is a **model-provider** feature, i.e. the
+> inference path. For the web-search **MCP** path, use `[mcp_servers.<name>.oauth]` +
+> `codex mcp login`, which performs OAuth with automatic refresh-token renewal.)
+
+### Option B — `env_key` (manual)
+
+Simplest to start with; **Codex does not refresh** a static env token.
+
+```bash
+export AGENTCORE_TOKEN=$(...)   # mint/refresh from your IdP; re-mint when it expires
+codex exec "..."
+```
+
+- On expiry the gateway returns **401**; re-mint into `AGENTCORE_TOKEN` and re-run.
+- For human developers the refresh-token grant renews silently (no browser re-login
+  until the refresh token lapses) — see
+  [Obtaining & refreshing your token](#obtaining--refreshing-your-token).
+
+### Both options
+
+- **No AWS credentials involved** — unlike the Native path there is no `aws sso login`
+  and no AWS profile; the IdP token is the only credential and never touches AWS IAM.
+
+---
+
+## Obtaining & refreshing your token
+
+The gateway accepts a standard **OIDC bearer token (JWT)** issued by your IdP.
+Developers never hold AWS credentials — the token *is* their credential, and it is
+short-lived, so the practical question is **how to obtain it and refresh it when it
+expires.** Pick the flow that matches who is calling.
+
+### Which flow?
+
+| Caller | OAuth grant | Identity in the token |
+|---|---|---|
+| **A human developer** (interactive) | Authorization Code + PKCE | the user (`sub`/`email`) — enables per-user attribution |
+| **Automation / CI / a shared service** | Client Credentials (M2M) | the client app (`client_id`) — no per-user identity |
+
+Set the gateway's `allowedClients` (or `allowedAudience`) to match the client/app
+you use here. Cognito **machine-to-machine** tokens carry `client_id` and no `aud`,
+so match on `allowedClients`.
+
+### Per-IdP token endpoints
+
+All four issue OIDC JWTs from a standard token endpoint. Examples (client-credentials
+shown; swap `grant_type` for the interactive flow — see below):
+
+```bash
+# Amazon Cognito
+curl -s -X POST "https://<domain>.auth.<region>.amazoncognito.com/oauth2/token" \
+  -d "grant_type=client_credentials&client_id=<ID>&client_secret=<SECRET>&scope=<resource-server>/<scope>"
+
+# Okta
+curl -s -X POST "https://<tenant>.okta.com/oauth2/v1/token" \
+  -d "grant_type=client_credentials&client_id=<ID>&client_secret=<SECRET>&scope=<custom-scope>"
+
+# Microsoft Entra ID
+curl -s -X POST "https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/token" \
+  -d "grant_type=client_credentials&client_id=<ID>&client_secret=<SECRET>&scope=<app-id-uri>/.default"
+
+# Auth0
+curl -s -X POST "https://<tenant>.auth0.com/oauth/token" \
+  -H "Content-Type: application/json" \
+  -d '{"grant_type":"client_credentials","client_id":"<ID>","client_secret":"<SECRET>","audience":"<api-identifier>"}'
+```
+
+Each returns JSON with `access_token` (and, for interactive flows, a `refresh_token`).
+Extract **`access_token`** into `AGENTCORE_TOKEN` as shown in Step 3.
+
+> **Use `access_token`, not `id_token`.** Verified against a live gateway: a Cognito
+> `id_token` is rejected with **HTTP 403 `insufficient_scope`** — the gateway's
+> `CUSTOM_JWT` authorizer validates the OAuth **access token** (and its scope), not
+> the OIDC identity token. If you see 403 with a valid-looking login, you almost
+> certainly sent the `id_token`.
+
+### Refreshing — there is no AWS credential to manage
+
+The token has an IdP-controlled TTL (commonly 1 hour). When it expires the gateway
+returns **401**; the fix is to mint a new token — there is nothing in AWS to refresh
+or rotate, because the developer has no AWS identity. Two patterns:
+
+- **Interactive (human) developers** — use the Authorization Code + PKCE flow once
+  (browser sign-in against EntraID/Okta, MFA included), then use the returned
+  **`refresh_token`** to obtain new access tokens silently until the refresh token
+  itself expires:
+  ```bash
+  export AGENTCORE_TOKEN=$(curl -s -X POST "<idp-token-endpoint>" \
+    -d "grant_type=refresh_token&client_id=<ID>&refresh_token=<REFRESH_TOKEN>" \
+    | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+  ```
+  Wrap this in a shell function / login script so a new token is fetched at the
+  start of a session (or on a 401). No browser re-auth until the refresh token
+  lapses.
+
+- **Automation / M2M** — re-run the client-credentials `curl` (no refresh token
+  exists for that grant; you simply request a fresh one). Cheap and stateless — do
+  it on a timer or before each batch.
+
+> **Relationship to the Native AWS Access path:** there, `aws sso login` plays the
+> same role — it re-authenticates against the same corporate IdP (EntraID/Okta via
+> IAM Identity Center) and caches fresh **temporary AWS credentials**. The gateway
+> path skips AWS entirely: the IdP token goes straight to the gateway. Either way,
+> **refresh = re-authenticate against your corporate IdP**, never an AWS IAM user.
+
+> **Optional credential helper:** the repo's optional
+> [`aws-oidc-auth`](../README.md#optional-helper-escape-hatch) implements the
+> browser OIDC (PKCE) → token flow as a reusable helper for orgs that want a
+> packaged refresh loop instead of scripting the `curl` above. It is **not
+> required** for this pattern.
 
 ---
 
@@ -238,9 +405,11 @@ To add a server-side domain denylist (hidden from the model), set the target's
 ### 2. Get a token and wire it into Codex
 
 Fetch the bearer token exactly as in [Step 3](#step-3-get-a-token-and-point-codex-at-it)
-(`export AGENTCORE_TOKEN=...`). Web search **augments whatever model Codex already
-uses** — it does not require the inference gateway provider. The verified config
-drives it with the native `amazon-bedrock` provider:
+and refresh it the same way (see
+[Obtaining & refreshing your token](#obtaining--refreshing-your-token)). Web search
+**augments whatever model Codex already uses** — it does not require the inference
+gateway provider. The verified config drives it with the native `amazon-bedrock`
+provider:
 
 ```toml
 # --- model provider: needs AWS credentials in your env for SigV4 ---

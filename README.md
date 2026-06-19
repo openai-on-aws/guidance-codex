@@ -50,12 +50,37 @@ All patterns include:
 - [Troubleshooting](docs/operate-troubleshooting.md)
 - [CHANGELOG](CHANGELOG.md)
 
-## Source Packages
+## Client tooling — prefer Codex-native, no binaries
 
-| Package | Description |
-|---------|-------------|
-| [aws-oidc-auth/](https://github.com/aws-samples/sample-openai-on-aws/tree/main/aws-oidc-auth) | Go credential helper — exchanges OIDC tokens or AWS IdC sessions for temporary AWS credentials. See [AUTH_HELPER.md](https://github.com/aws-samples/sample-openai-on-aws/blob/main/AUTH_HELPER.md) for full docs. |
-| [otel-helper/](https://github.com/aws-samples/sample-openai-on-aws/tree/main/otel-helper) | Go binary that enriches OTel headers with AWS credentials for the Native AWS Access OTel pipeline. |
+This guidance favors **Codex-native** authentication and telemetry over shipping
+custom client binaries:
+
+- **Authentication** — Codex's built-in `amazon-bedrock` provider signs AWS SigV4
+  using the standard AWS credential chain; developers authenticate with
+  `aws sso login` (IAM Identity Center). The gateway patterns use a `CUSTOM_JWT`
+  authorizer, so Codex sends a plain OIDC bearer token issued by your IdP. Codex can
+  refresh that token automatically — point the provider at a token-fetch `auth`
+  command (model-provider path) or use `[mcp_servers.*.oauth]` (MCP path); a static
+  `env_key` token is the manual alternative. See
+  [daily use](docs/QUICKSTART_AGENTCORE_GATEWAY.md#daily-use).
+  **No credential-helper binary is required for these default paths.**
+- **Telemetry** — Codex emits OpenTelemetry natively via its `[otel]` config; you
+  point it at a collector (see [operate-monitoring.md](docs/operate-monitoring.md)).
+  Identity is stamped via static OTLP headers / span attributes in config, so **no
+  header-enrichment binary is required.**
+
+> **SigV4 caveat:** Codex cannot sign requests to CloudWatch's native OTLP endpoint
+> (which requires SigV4). The Native AWS Access path therefore runs a standard
+> [AWS Distro for OpenTelemetry (ADOT) Collector](https://aws-otel.github.io/) that
+> signs and forwards to CloudWatch. That is upstream AWS software you run, not a
+> binary shipped by this repo. The AgentCore Gateway pattern avoids it entirely —
+> usage telemetry lands in CloudWatch `AWS/BedrockMantle` server-side.
+
+### Optional helper (escape hatch)
+
+| Package | When you need it |
+|---------|------------------|
+| [aws-oidc-auth/](https://github.com/aws-samples/sample-openai-on-aws/tree/main/aws-oidc-auth) | **Optional.** A `credential_process` helper for organizations that federate a raw OIDC IdP (Okta / Entra ID / Auth0 / Cognito) to AWS **without** IAM Identity Center. If you use IdC (`aws sso login`) or a gateway with OIDC bearer auth, you do **not** need this. See [AUTH_HELPER.md](https://github.com/aws-samples/sample-openai-on-aws/blob/main/AUTH_HELPER.md). |
 
 ## Contributing
 
