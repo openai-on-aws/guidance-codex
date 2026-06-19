@@ -1,28 +1,48 @@
 # Decide
 
-Two deployment patterns, in recommended order. Choose the first one your organization can run.
+Three deployment patterns. Choose the first one that fits your organization's
+priorities on the two axes that matter: *managed-vs-self-run ops* and
+*soft-vs-hard governance*.
 
-> **Decision rule:** If you can run IAM Identity Center, use Native AWS Access.
-> If you need hard per-user budgets or rate limiting, use LLM Gateway.
+> **Decision rule:**
+> - If you can run IAM Identity Center and want native per-user cost attribution
+>   with no gateway, use **Native AWS Access**.
+> - If you want a managed gateway with minimal ops — and **especially if you need
+>   central content guardrails, multi-provider routing, or AWS-private web search**
+>   (none of which Native offers) — use **AgentCore Gateway**.
+> - If you need hard per-user/per-team budgets or rate limiting, use **LLM Gateway**.
 
 ## Pattern Comparison
 
-| Capability | Native AWS Access | LLM Gateway |
-|------------|-------------------|------------------|
-| **Authentication** | SAML → IdC | OIDC → Gateway |
-| **IAM Identity Center Required?** | ✅ Yes | ❌ No |
-| **Path to Bedrock** | Codex → Bedrock (native AWS SDK) | Codex → Gateway → Bedrock |
-| **Developer Command** | `aws sso login` | `export OPENAI_API_KEY=...` |
-| **Per-user Bedrock CloudTrail / CUR** | ✅ Native | ❌ Gateway role only |
-| **Soft Alerts (CloudWatch)** | Optional | Optional |
-| **Hard Budget Limits** | ❌ No | Optional |
-| **Per-team Quotas** | ❌ No | Optional |
-| **Rate Limiting (RPM/TPM)** | ❌ No | Optional |
-| **Model Routing/Fallback** | ❌ No | ✅ Yes |
-| **Setup Time** | 5-60 min | 15 min |
-| **Infra Cost** | Free (AWS control plane) | ~$100-150/mo |
+| Capability | Native AWS Access | AgentCore Gateway | LLM Gateway |
+|------------|-------------------|-------------------|-------------|
+| **Authentication** | SAML → IdC | OIDC bearer → Gateway (authorizer: `CUSTOM_JWT`) | OIDC bearer → Gateway |
+| **IAM Identity Center Required?** | ✅ Yes | ❌ No | ❌ No |
+| **Path to Bedrock** | Codex → Bedrock (native AWS SDK) | Codex → managed gateway → Bedrock | Codex → self-run gateway → Bedrock |
+| **Infra you operate** | None | None (managed/serverless) | ECS + RDS + ALB |
+| **GPT-5.x via Bedrock Mantle** | ✅ Native | ✅ Built-in `bedrock-mantle` connector | ✅ Custom config |
+| **Developer Command** | `aws sso login` | `export AGENTCORE_TOKEN=<oidc-jwt>` | `export OPENAI_API_KEY=...` |
+| **Per-user Bedrock CloudTrail / CUR** | ✅ Native | ❌ Gateway role only | ❌ Gateway role only |
+| **Soft Alerts (CloudWatch)** | Optional | ✅ `AWS/BedrockMantle` metrics | Optional |
+| **Hard Budget Limits** | ❌ No | ❌ No (not built-in) | Optional |
+| **Per-team Quotas** | ❌ No | ❌ No (not built-in) | Optional |
+| **Rate Limiting (RPM/TPM)** | ❌ No | ⚠️ RPM throttle only | Optional |
+| **Model Routing/Fallback** | ❌ No | ✅ Multi-provider (Bedrock/OpenAI/Anthropic) | ✅ Yes |
+| **Content Guardrails** | ❌ No | ✅ Bedrock Guardrails + Policy | ❌ No |
+| **AWS-managed web search (MCP tool)** | ❌ No | ✅ Verified ([guide](QUICKSTART_AGENTCORE_GATEWAY.md#optional-aws-managed-web-search-mcp-tool)) | ❌ No |
+| **Setup Time** | 5-60 min | ~10 min (2 API calls + IAM role) | 15 min + build/harden |
+| **Infra Cost** | Free (AWS control plane) | Pay-per-use (managed) | ~$100-150/mo |
 
----
+> Model availability is region-bound — `gpt-5.5` (us-east-1 / us-east-2), `gpt-5.4`
+> also in us-west-2; the AgentCore web search connector is us-east-1 only. See
+> [reference-regions.md](reference-regions.md).
+
+> **AgentCore Gateway auth (verified end-to-end on this repo's PoC):** create the
+> gateway with a `CUSTOM_JWT` authorizer pointed at your OIDC discovery URL. Codex
+> then authenticates with a plain OIDC bearer token — the **same** token the other
+> patterns already issue — talking directly to the gateway with no signing proxy
+> and no new credential mechanism. See
+> [QUICKSTART_AGENTCORE_GATEWAY.md](QUICKSTART_AGENTCORE_GATEWAY.md).
 
 ---
 
@@ -69,6 +89,30 @@ other OpenAI-compatible gateways — **Portkey**, **Bifrost**, **Kong AI Gateway
 Choose whichever matches your organization's operational posture.
 
 *(Canonical deploy doc: [QUICKSTART_LLM_GATEWAY.md](QUICKSTART_LLM_GATEWAY.md).)*
+
+## Prerequisite checklist — AgentCore Gateway
+
+Run this path if you want a **managed** gateway and can accept soft (not hard)
+governance. All of the following must apply:
+
+- [ ] You want a single managed endpoint with multi-provider routing and/or
+      central Bedrock Guardrails, and you do **not** want to operate ECS/RDS/ALB.
+- [ ] Soft controls are sufficient: per-user/per-team **hard budgets** are *not*
+      a requirement (AgentCore inference targets do not provide them today).
+- [ ] You have an OIDC IdP with a reachable discovery URL that can issue JWTs to
+      developer machines (Cognito, Okta, Entra ID, Auth0). The gateway uses a
+      `CUSTOM_JWT` authorizer; Codex sends the OIDC bearer directly — no proxy.
+- [ ] Your AWS CLI / SDK is recent enough to expose AgentCore *inference* targets
+      (botocore/boto3 ≥ 1.43.33; older SDKs only show mcp/http targets).
+- [ ] Amazon Bedrock Mantle access for GPT-5.x in the target region
+      (us-east-1 / us-east-2; `gpt-5.5` is not in us-west-2 — see
+      [reference-regions.md](reference-regions.md)).
+
+**Reference implementation:** CloudFormation templates in
+`deployment/infrastructure/` — `agentcore-websearch.yaml` (fully CFN-native) and
+`agentcore-inference.yaml` (gateway + role in CFN; the inference target is added by
+one documented CLI call, as CloudFormation does not yet support inference targets).
+Canonical deploy doc: [QUICKSTART_AGENTCORE_GATEWAY.md](QUICKSTART_AGENTCORE_GATEWAY.md).
 
 ---
 
