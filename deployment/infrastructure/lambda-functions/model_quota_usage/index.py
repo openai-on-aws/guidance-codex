@@ -16,77 +16,17 @@ from html_utils import generate_error_html, get_status_color
 
 # Quota code mappings for each model
 QUOTA_MAPPINGS = {
-    "global.anthropic.claude-opus-4-6-v1": {
+    "openai.gpt-5-5": {
         "name": "Bedrock LLM (Global)",
         "tpm_quota_code": "L-3DCCFAA4",
         "rpm_quota_code": "L-3DD46812",
-        "regions": ["us-east-1", "us-west-2", "eu-central-1", "ap-northeast-1"]
+        "regions": ["us-east-1", "us-east-2"]
     },
-    "us.anthropic.claude-opus-4-6-v1": {
+    "openai.gpt-5-4": {
         "name": "Bedrock LLM",
         "tpm_quota_code": "L-0AD9BBE8",
         "rpm_quota_code": "L-11DFF789",
         "regions": ["us-east-1", "us-west-2", "us-east-2"]
-    },
-    "eu.anthropic.claude-opus-4-6-v1": {
-        "name": "Bedrock LLM (EU)",
-        "tpm_quota_code": "L-0AD9BBE8",
-        "rpm_quota_code": "L-11DFF789",
-        "regions": ["eu-central-1", "eu-west-1", "eu-west-3"]
-    },
-    "au.anthropic.claude-opus-4-6-v1": {
-        "name": "Bedrock LLM (AU)",
-        "tpm_quota_code": "L-0AD9BBE8",
-        "rpm_quota_code": "L-11DFF789",
-        "regions": ["ap-southeast-2", "ap-southeast-4"]
-    },
-    "us.anthropic.claude-opus-4-1-20250805-v1:0": {
-        "name": "Bedrock LLM",
-        "tpm_quota_code": "L-BD85BFCD",
-        "rpm_quota_code": "L-7EC72A47",
-        "regions": ["us-east-1", "us-west-2", "us-east-2"]
-    },
-    "us.anthropic.claude-opus-4-20250514-v1:0": {
-        "name": "Bedrock LLM",
-        "tpm_quota_code": "L-29C2B0A3", 
-        "rpm_quota_code": "L-C99C7EF6",
-        "regions": ["us-east-1", "us-west-2", "us-east-2"]
-    },
-    "us.anthropic.claude-sonnet-4-20250514-v1:0": {
-        "name": "Bedrock LLM",
-        "tpm_quota_code": "L-59759B4A",
-        "rpm_quota_code": "L-559DCC33",
-        "regions": ["us-east-1", "us-west-2", "us-east-2"]
-    },
-    "us.anthropic.claude-3-7-sonnet-20250219-v1:0": {
-        "name": "Bedrock LLM",
-        "tpm_quota_code": "L-6E888CC2",
-        "rpm_quota_code": "L-3D8CC480",
-        "regions": ["us-east-1", "us-west-2", "us-east-2"]
-    },
-    "eu.anthropic.claude-sonnet-4-20250514-v1:0": {
-        "name": "Bedrock LLM (EU)",
-        "tpm_quota_code": "L-59759B4A",
-        "rpm_quota_code": "L-559DCC33",
-        "regions": ["eu-west-1", "eu-west-3", "eu-central-1"]
-    },
-    "eu.anthropic.claude-3-7-sonnet-20250219-v1:0": {
-        "name": "Bedrock LLM (EU)",
-        "tpm_quota_code": "L-6E888CC2",
-        "rpm_quota_code": "L-3D8CC480",
-        "regions": ["eu-west-1", "eu-west-3", "eu-central-1"]
-    },
-    "apac.anthropic.claude-sonnet-4-20250514-v1:0": {
-        "name": "Bedrock LLM (APAC)",
-        "tpm_quota_code": "L-59759B4A",
-        "rpm_quota_code": "L-559DCC33",
-        "regions": ["ap-northeast-1", "ap-southeast-1", "ap-southeast-2"]
-    },
-    "apac.anthropic.claude-3-7-sonnet-20250219-v1:0": {
-        "name": "Bedrock LLM (APAC)",
-        "tpm_quota_code": "L-6E888CC2",
-        "rpm_quota_code": "L-3D8CC480",
-        "regions": ["ap-northeast-1", "ap-southeast-1", "ap-southeast-2"]
     }
 }
 
