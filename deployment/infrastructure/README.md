@@ -53,9 +53,7 @@ users.
 | Template                       | Purpose                                                                  |
 | ------------------------------ | ------------------------------------------------------------------------ |
 | `networking.yaml`              | VPC, two public subnets, IGW. Used by the LiteLLM gateway ECS stack (not the native-access monitoring path, which is collector-less). |
-| `metrics-aggregation.yaml`     | **Optional / advanced.** Lambda + EventBridge that rolls log-derived metrics into CloudWatch and (with the bundled `quota_monitor` Lambda) emits SNS alerts off a `QuotaPolicies` DynamoDB table. Most deployments should rely on **gateway-native quotas** (LiteLLM `/key/generate` budgets, Portkey budget limits, Kong rate-limiting plugins) instead — see `docs/QUICKSTART_LLM_GATEWAY.md` § Quota Enforcement. Use this stack only if you need policies the gateway can't express. |
 | `codex-otel-dashboard.yaml`    | CloudWatch dashboard for the native-access **local sidecar** path. A single custom-widget **Lambda** (`lambda-functions/codex-widget/`) queries the CloudWatch PromQL API and renders scorecards, bar charts, ranked per-user tables, and a session-source pie. **Requires packaging** — deploy with `deployment/scripts/deploy-otel-stack.sh` (it runs `aws cloudformation package`). |
-| `codex-dashboard.yaml`         | CloudWatch dashboard with embedded custom-widget Lambdas that read metrics from a CloudWatch Logs group. **Requires packaging** — run `aws cloudformation package` before `deploy`, and the S3 artifacts bucket must be in the same region as the stack (see `s3bucket.yaml`). |
 | `litellm-dashboard.yaml`       | CloudWatch dashboard for the LiteLLM gateway.                            |
 
 ### Artifacts
@@ -64,11 +62,9 @@ users.
 | ----------------- | ------------------------------------------------------------------------ |
 | `s3bucket.yaml`   | S3 bucket for CloudFormation Lambda code packages and artifacts.         |
 
-The `lambda-functions/` subdirectory contains the source for Lambda code
-referenced by the dashboard and aggregation templates; it is not itself a
-CloudFormation template. The `quota_monitor` Lambda there is part of the
-optional `metrics-aggregation.yaml` stack (see note above) and is not
-required for gateway-enforced quotas.
+The `lambda-functions/` subdirectory contains the source for the
+`codex-widget` Lambda referenced by `codex-otel-dashboard.yaml`; it is not
+itself a CloudFormation template.
 
 The LiteLLM gateway ECS stack (`litellm-ecs.yaml`) lives outside this
 directory at `deployment/litellm/ecs/litellm-ecs.yaml` because it depends on
