@@ -1,6 +1,6 @@
 # CloudFormation Infrastructure
 
-This directory contains the 18 CloudFormation templates that compose the
+This directory contains the 14 CloudFormation templates that compose the
 Codex-on-Bedrock guidance. Templates are grouped by purpose and deployed
 directly with `aws cloudformation deploy`.
 
@@ -36,17 +36,6 @@ landing page.
 | `cognito-user-pool-setup.yaml`      | Cognito User Pool, app client, and (optional) external IdP federation.   |
 | `cognito-identity-pool.yaml`        | Standalone Identity Pool supporting OIDC providers or Cognito User Pools. |
 | `cognito-custom-domain-cert.yaml`   | ACM certificate for a Cognito custom domain. **Must deploy in `us-east-1`.** |
-
-### Distribution
-
-Optional packaging and landing-page paths for handing the Codex CLI to end
-users.
-
-| Template                          | Purpose                                                            |
-| --------------------------------- | ------------------------------------------------------------------ |
-| `distribution.yaml`               | S3 bucket + IAM for direct package distribution.                   |
-| `presigned-s3-distribution.yaml`  | Presigned-URL variant of the distribution bucket.                  |
-| `landing-page-distribution.yaml`  | Authenticated landing page (ALB + Lambda + OIDC) serving the CLI bundle. |
 
 ### Monitoring (OTel + Dashboards)
 
@@ -253,8 +242,8 @@ for f in deployment/infrastructure/*.yaml; do
     && echo "OK" || echo "FAILED"
 done
 
-# Confirm all 18 templates are present
-ls deployment/infrastructure/*.yaml | wc -l    # → 18
+# Confirm all 14 templates are present
+ls deployment/infrastructure/*.yaml | wc -l    # → 14
 
 # Diff against a deployed stack before applying changes
 aws cloudformation deploy \
