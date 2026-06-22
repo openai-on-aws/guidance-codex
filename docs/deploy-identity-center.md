@@ -301,9 +301,20 @@ exporter (the usage dashboard reads metrics; the default is `statsig`):
 environment = "production"
 
 [otel.metrics_exporter.otlp-http]
+# Full /v1/metrics path required — Codex does not append it.
 endpoint = "http://127.0.0.1:4318/v1/metrics"
 protocol = "binary"
 ```
+
+Metrics export is gated (only metrics, not logs/traces) behind `analytics.enabled`,
+which both `codex exec` and the TUI default to `true` — so metrics flow without
+extra config. If a managed/org config sets `[analytics] enabled = false`, metrics
+are silently dropped; confirm it is not disabled when troubleshooting.
+
+A clean `codex exec` turn flushes its metrics on exit (and otherwise on a 60s
+interval). Optional: set `OTEL_METRIC_EXPORT_INTERVAL=1000` (ms) so a batch also
+flushes periodically — a safety net for runs that exit via an error path, which
+can skip the on-exit flush.
 
 ### Required IAM
 

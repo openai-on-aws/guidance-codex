@@ -344,6 +344,13 @@ aws cloudwatch get-metric-statistics --region us-east-1 \
 Available metrics include `Inferences`, `InputTokens`, `OutputTokens`,
 `TotalInputTokens`, `TotalOutputTokens`, and `InferenceClientErrors`.
 
+Gateway invocation/latency/error metrics (separate from the Mantle usage metrics
+above) land in `AWS/Bedrock-AgentCore` after a one-time **CloudWatch Transaction
+Search** enablement. Both namespaces are recorded server-side, with no collector
+to run. They do not include Codex's own per-turn / per-user client OTEL; for that
+(and how to wire it on this path when developers hold no AWS credentials), see
+[operate-monitoring.md — AgentCore Gateway path](operate-monitoring.md#agentcore-gateway-path).
+
 ---
 
 ## Optional: AWS-managed web search (MCP tool)

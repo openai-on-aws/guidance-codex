@@ -24,9 +24,9 @@ Corporate IdP (EntraID / Okta / …)
                                 └── Per-user / per-team usage dashboard + quotas
 ```
 
-Single identity, two dashboards. The Gateway path splits this into two
-planes (JWT for attribution, task role for Bedrock) — see the gateway
-caveat at the end.
+Single identity, two dashboards. The gateway paths split this into two
+planes (JWT for attribution, task role for Bedrock) — see the LLM Gateway
+and AgentCore Gateway sections at the end.
 
 This diagram is the canonical version. Other docs link here; do not copy.
 
@@ -65,19 +65,20 @@ or VPC. `deploy-otel-stack.sh` deploys only the dashboard:
   covering tokens, per-user attribution, API requests, and activity. The
   dashboard is rendered by a single custom-widget **Lambda**
   (`lambda-functions/codex-widget/`) that queries the CloudWatch PromQL API and
-  returns HTML. Custom widgets are used because CloudWatch's built-in PromQL
-  chart widget renders unreliably above a small widget count or when chart types
-  are mixed; the Lambda sidesteps that. Tradeoff: the dashboard adds a Lambda +
-  IAM role + an S3 artifact bucket (deployed via `aws cloudformation package`).
+  returns HTML. The dashboard adds a Lambda + IAM role + an S3 artifact bucket
+  (deployed via `aws cloudformation package`).
 
 OTLP metric ingestion is a one-time per-account enablement (`aws cloudwatch
 start-otel-enrichment` + `aws observabilityadmin start-telemetry-enrichment`);
 until both report `Running`, the sidecar's exports are accepted but not stored.
 
-End users emit metrics automatically once their generated `~/.codex/config.toml`
-ships with an `[otel]` block pointing at the local sidecar (`endpoint =
-"http://127.0.0.1:4318"`) — see `deploy-identity-center.md` §5. The developer's
-IAM role/permission set needs `cloudwatch:PutMetricData`.
+End users emit metrics once their generated `~/.codex/config.toml` ships with an
+`[otel]` block pointing at the local sidecar
+(`endpoint = "http://127.0.0.1:4318/v1/metrics"`) — see `deploy-identity-center.md`
+§5. Note: Codex gates **metrics** export (not logs/traces) behind
+`analytics.enabled`, which `codex exec` and the TUI default to `true` — metrics
+flow by default and are dropped only if a config sets `[analytics] enabled = false`.
+The developer's IAM role/permission set needs `cloudwatch:PutMetricData`.
 
 ### Metrics Codex actually emits
 
@@ -221,14 +222,47 @@ reference setup and its telemetry configuration.
 
 ---
 
+## AgentCore Gateway path
+
+The managed gateway has two telemetry sources, with different setup.
+
+### Server-side metrics (no collector)
+
+AWS records these; there is no sidecar to run and no SigV4 signing to arrange:
+
+| Namespace | Emitted by | Carries | Setup |
+|---|---|---|---|
+| `AWS/BedrockMantle` | Bedrock **Mantle** (the GPT-5.x inference layer) | Token usage: `Inferences`, `InputTokens`, `OutputTokens`, … keyed by `Model`/`Project` | None — live as soon as traffic flows |
+| `AWS/Bedrock-AgentCore` | AgentCore **Gateway** observability | Invocation/latency/error metrics: `Invocations`, `Throttles`, `SystemErrors`, `UserErrors`, `Latency`, `Duration` (dimensions `Operation`, `Protocol`, `Method`, `Resource`) | One-time **CloudWatch Transaction Search** enablement per account |
+
+These namespaces do not include Codex's client OTEL: there is no per-user
+`user.id` dimension and no per-turn / per-tool breakdown. All gateway traffic
+shares one IAM role, so neither namespace attributes usage to an end user. See
+the AgentCore quickstart's
+[Verify telemetry](QUICKSTART_AGENTCORE_GATEWAY.md#verify-telemetry) section for
+a live `get-metric-statistics` example.
+
+### Client OTEL (the richer signals)
+
+To also get the Layer 1 client metrics — `codex.turn.token_usage`,
+`codex.turn.tool.call`, per-user `user.id` — enable Codex's `[otel]` block and run
+the **per-developer local sidecar** exactly as on the
+[Native path](#layer-1--live-dashboards--quota-alerts-cloudwatch). This is
+independent of the gateway: Codex emits client OTEL the same way regardless of how
+it reaches Bedrock. (Codex cannot SigV4-sign, so the sidecar signs — it needs the
+developer's AWS credentials; a developer holding only an OIDC bearer has no
+credentials for the sidecar to sign with.)
+
+---
+
 ## Verification checklist
 
 After deploying the OTel stack and generating developer configs:
 
 1. **Metric lands in CloudWatch.** Run `deployment/scripts/check-otel-pipeline.sh
-   <region>` on the developer machine; it checks sidecar health and queries the
-   CloudWatch PromQL API for `codex.turn.token_usage`. Metrics surface within
-   ~60s of a Codex call.
+   <region>` on the developer machine; it checks the metrics-exporter config and
+   sidecar health, then queries the CloudWatch PromQL API for
+   `codex.turn.token_usage`. Metrics surface within ~60s of a Codex call.
 2. **Dashboard renders per-user.** Open the `CodexOnBedrock` dashboard;
    "Estimated token spend (USD) per user" should show at least one
    user after a real session.

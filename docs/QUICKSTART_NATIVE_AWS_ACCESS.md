@@ -444,6 +444,7 @@ otherwise). Append to `~/.codex/config.toml`:
 environment = "production"
 
 [otel.metrics_exporter.otlp-http]
+# Include the full /v1/metrics path — Codex does not append it for you.
 endpoint = "http://127.0.0.1:4318/v1/metrics"
 protocol = "binary"
 ```
@@ -451,6 +452,19 @@ protocol = "binary"
 Codex exports to the local sidecar, which SigV4-signs and forwards to
 `https://monitoring.<region>.amazonaws.com`. View the dashboard under
 **CloudWatch → Dashboards → CodexOnBedrock**.
+
+> **If no metrics appear:** Codex gates **metrics** export (not logs/traces)
+> behind `analytics.enabled`. `codex exec` and the interactive TUI default it to
+> `true`, so metrics flow out of the box — but if an org/managed config sets
+> `[analytics] enabled = false`, metrics are silently dropped. Confirm it is not
+> disabled.
+
+> **`codex exec` flush:** metrics flush on clean process exit and on a 60-second
+> periodic interval (verified end-to-end: a clean `codex exec` turn flushes its
+> metrics on exit — Codex `exec` → sidecar → CloudWatch, queried via PromQL).
+> Optional: if a run may exit via an error path (which can skip the on-exit
+> flush), set `OTEL_METRIC_EXPORT_INTERVAL=1000` (milliseconds) so a batch also
+> flushes periodically as a safety net.
 
 ### Required IAM
 
