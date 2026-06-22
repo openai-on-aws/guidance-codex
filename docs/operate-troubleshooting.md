@@ -98,17 +98,31 @@ regardless of how you deployed.
 > on the developer machine.
 
 ### No metrics in CloudWatch after a Codex session
+- **Check the `[otel.metrics_exporter.otlp-http]` block first.** `~/.codex/config.toml`
+  must point the **metrics** exporter at the sidecar with the full `/v1/metrics`
+  path (`endpoint = "http://127.0.0.1:4318/v1/metrics"`, Codex does not append it).
+  A missing block means metrics default to the `statsig` exporter, not your collector.
+- **Check the `analytics.enabled` metrics gate.** Codex gates **metrics** export
+  (only metrics — logs/traces are unaffected) behind `analytics.enabled`. Both
+  `codex exec` and the TUI default it to `true`, so metrics normally flow; but if a
+  user, managed, or org config sets `[analytics] enabled = false`, the sidecar looks
+  healthy while no metrics arrive. Confirm it is not disabled.
 - **Checklist:**
-  1. Is the sidecar running? `curl http://127.0.0.1:13133/` (health) should
+  1. `[otel.metrics_exporter.otlp-http]` block present with the full `/v1/metrics`
+     endpoint (see above).
+  2. `[analytics] enabled` is not set to `false` anywhere in the config layers.
+  3. A clean `codex exec` turn flushes on exit. If a run may exit via an error path
+     (which can skip the on-exit flush), set `OTEL_METRIC_EXPORT_INTERVAL=1000` (ms)
+     so a batch also flushes on a periodic interval as a safety net.
+  4. Is the sidecar running? `curl http://127.0.0.1:13133/` (health) should
      return 200. If not, start `otelcol-local-<platform> --config otel-local-config.yaml`.
-  2. Verify `~/.codex/config.toml` `[otel]` has
-     `endpoint = "http://127.0.0.1:4318"` (point at the local sidecar).
-  3. Verify Codex version ≥ 0.130 — older versions emit different metric names.
-  4. Confirm the IAM role/permission set allows `cloudwatch:PutMetricData`;
+  5. Verify Codex version ≥ 0.130 — older versions emit different metric names.
+  6. Confirm the IAM role/permission set allows `cloudwatch:PutMetricData`;
      without it the sidecar's SigV4 export is rejected (check collector stderr
      for 4xx/AccessDenied).
-  5. Confirm the sidecar's `sigv4auth` region matches the dashboard region.
-  6. Wait at least 60 seconds — the batch processor flushes on an interval.
+  7. Confirm the sidecar's `sigv4auth` region matches the dashboard region.
+  8. Run `deployment/scripts/check-otel-pipeline.sh <region>` — it checks the
+     exporter block, the analytics gate, sidecar health, credentials, and the PromQL query.
 
 ### Metrics land but `user.id` dimension is empty or shows incorrect value
 - **Cause:** `__USER_ID__` / `__USER_EMAIL__` was not substituted in the

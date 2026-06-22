@@ -66,15 +66,32 @@ custom client binaries:
   **No credential-helper binary is required for these default paths.**
 - **Telemetry** — Codex emits OpenTelemetry natively via its `[otel]` config; you
   point it at a collector (see [operate-monitoring.md](docs/operate-monitoring.md)).
-  Identity is stamped via static OTLP headers / span attributes in config, so **no
-  header-enrichment binary is required.**
+  Per-user identity is added by the **local collector** — baked into the sidecar
+  config as `user.id` / `user.email` resource attributes — so **no
+  header-enrichment binary is required.** (Codex can set `otel.span_attributes`,
+  but those apply to traces, not metrics; for per-user metric attribution either
+  bake it in the collector as above, or have Codex forward static `[otel.*].headers`
+  and lift them via `from_context`.) Note: **metrics** export (not logs/traces) is
+  gated behind `analytics.enabled`, which `codex exec` and the TUI default to
+  `true` — so metrics flow by default; they are dropped only if a config sets
+  `[analytics] enabled = false`.
 
 > **SigV4 caveat:** Codex cannot sign requests to CloudWatch's native OTLP endpoint
-> (which requires SigV4). The Native AWS Access path therefore runs a standard
+> (which requires SigV4). Any path that ships Codex's own client OTEL to CloudWatch
+> therefore runs a standard
 > [AWS Distro for OpenTelemetry (ADOT) Collector](https://aws-otel.github.io/) that
-> signs and forwards to CloudWatch. That is upstream AWS software you run, not a
-> binary shipped by this repo. The AgentCore Gateway pattern avoids it entirely —
-> usage telemetry lands in CloudWatch `AWS/BedrockMantle` server-side.
+> signs and forwards. That is upstream AWS software you run, not a binary shipped by
+> this repo.
+>
+> **Two telemetry sources:**
+> - **Server-side metrics.** With AgentCore Gateway, AWS records usage telemetry
+>   without a collector: GPT-5.x token usage in `AWS/BedrockMantle` (emitted by
+>   Bedrock Mantle, the inference layer) and gateway invocation / latency / error
+>   metrics in `AWS/Bedrock-AgentCore` (emitted by AgentCore Gateway observability).
+> - **Client OTEL (Codex's `[otel]`).** The per-turn / per-tool / per-user signals
+>   come from Codex itself and require the ADOT collector above on every pattern,
+>   AgentCore included. See [operate-monitoring.md](docs/operate-monitoring.md) for
+>   how to wire client OTEL.
 
 ### Optional helper (escape hatch)
 

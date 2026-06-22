@@ -21,6 +21,30 @@ echo "Region: ${REGION}"
 echo "========================================="
 echo ""
 
+echo "STEP 0: Codex metrics config"
+echo "----------------------------"
+# Metrics export needs an OTLP exporter pointed at the sidecar. Codex also gates
+# metrics (only metrics — logs/traces are unaffected) behind analytics.enabled,
+# which exec and the TUI default to true; the silent failure mode is an explicit
+# [analytics] enabled = false somewhere in the config layers.
+CODEX_CONFIG="${CODEX_HOME:-$HOME/.codex}/config.toml"
+if [ -f "$CODEX_CONFIG" ]; then
+  if grep -q '\[otel.metrics_exporter.otlp-http\]' "$CODEX_CONFIG"; then
+    echo "✓ [otel.metrics_exporter.otlp-http] configured"
+  else
+    echo "✗ [otel.metrics_exporter.otlp-http] missing — metrics default to statsig, not the sidecar"
+  fi
+  if grep -Eq '^[[:space:]]*enabled[[:space:]]*=[[:space:]]*false' "$CODEX_CONFIG"; then
+    echo "✗ analytics appears DISABLED ([analytics] enabled = false) — this suppresses"
+    echo "  metrics export (logs/traces unaffected). Remove it or set enabled = true."
+  else
+    echo "✓ analytics not disabled (metrics gate open; exec/TUI default to enabled)"
+  fi
+else
+  echo "✗ No Codex config at $CODEX_CONFIG"
+fi
+echo ""
+
 echo "STEP 1: Local sidecar collector health"
 echo "---------------------------------------"
 if curl -fsS --max-time 5 "${COLLECTOR_HEALTH}" >/dev/null 2>&1; then
