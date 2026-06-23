@@ -349,8 +349,11 @@ def requires_jwt(f):
             user_info = validate_jwt_token(token)
             request.user_info = user_info
         except ValueError as e:
+            # Log the specific reason server-side; return a generic message to
+            # the client so token-validation internals are not exposed and we
+            # don't reveal which check failed (CWE-209 / py/stack-trace-exposure).
             logger.warning(f"JWT validation failed: {e}")
-            return jsonify({'error': str(e)}), 401
+            return jsonify({'error': 'Invalid or expired token'}), 401
 
         return f(*args, **kwargs)
 
@@ -383,8 +386,10 @@ def get_my_key():
         }), 200
 
     except Exception as e:
+        # Detail is logged server-side; the client gets a generic message so
+        # internal error text is not exposed (CWE-209 / py/stack-trace-exposure).
         logger.error(f"Failed to get/create API key: {e}")
-        return jsonify({'error': f'Key management failed: {str(e)}'}), 500
+        return jsonify({'error': 'Key management failed'}), 500
 
 
 @app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
@@ -429,16 +434,31 @@ def proxy(path):
                 if chunk:
                     yield chunk
 
+        # This is an authenticated reverse proxy: the upstream (LiteLLM) body is
+        # streamed back verbatim. Because the request path is client-controlled,
+        # forward the body as a non-renderable type and tell the browser never to
+        # MIME-sniff it into HTML, so a crafted path can't yield reflected XSS
+        # (CWE-79 / py/reflective-xss). Codex consumes JSON / text/event-stream,
+        # neither of which a browser renders as HTML.
+        proxied_headers = {k: v for k, v in response.headers.items()
+                           if k.lower() not in ['content-encoding', 'content-length',
+                                                 'transfer-encoding', 'content-type',
+                                                 'x-content-type-options']}
+        proxied_headers['X-Content-Type-Options'] = 'nosniff'
+        upstream_content_type = response.headers.get('Content-Type', 'application/octet-stream')
+
         return Response(
             generate(),
             status=response.status_code,
-            headers={k: v for k, v in response.headers.items()
-                    if k.lower() not in ['content-encoding', 'content-length', 'transfer-encoding']},
+            headers=proxied_headers,
+            content_type=upstream_content_type,
         )
 
     except Exception as e:
+        # Detail is logged server-side; the client gets a generic message so
+        # internal error text is not exposed (CWE-209 / py/stack-trace-exposure).
         logger.error(f"Proxy request failed: {e}")
-        return jsonify({'error': f'Request failed: {str(e)}'}), 500
+        return jsonify({'error': 'Request failed'}), 500
 
 
 if __name__ == '__main__':
