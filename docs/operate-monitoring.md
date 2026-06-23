@@ -21,7 +21,7 @@ Corporate IdP (EntraID / Okta / …)
                  └── Local OTel sidecar collector (per developer)
                       └── CloudWatch native OTLP endpoint (SigV4)
                            └── CloudWatch Metrics (user.id dimension, PromQL)
-                                └── Per-user / per-team usage dashboard + quotas
+                                └── Per-user / per-team usage dashboard + quota alerts (soft; no cutoff)
 ```
 
 Single identity, two dashboards. The gateway paths split this into two

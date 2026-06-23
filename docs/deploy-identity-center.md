@@ -223,7 +223,7 @@ do on this path:
 
 | Want | Available | How |
 |---|---|---|
-| Per-team quota partitioning | Yes | Bedrock **Application Inference Profiles** — grant different IdC groups access to different profile ARNs via the permission set; each profile carries its own quota. |
+| Per-team cost attribution (not enforcement) | Yes | Bedrock **Application Inference Profiles** — grant different IdC groups access to different profile ARNs via the permission set, so spend tags per team in CUR. Profiles scope model access; they do **not** enforce per-team token/dollar quotas. Hard per-team quotas require the LLM Gateway — see `docs/01-decide.md`. |
 | Restrict users to specific models / regions / profiles | Yes | IAM policy conditions in the customer-managed policy attached to the permission set. |
 | Alert when a user crosses a usage threshold | Yes | CloudWatch alarm on the OTel `user.id` dimension (requires the optional OTel stack below). Alerts only — no cutoff. |
 | Hard per-user token / dollar budget with automatic cutoff | **No** | Not achievable with IdC alone. This is the LiteLLM Gateway's job — see `docs/01-decide.md`. |
