@@ -47,7 +47,7 @@ processors:
 
 exporters:
   # CloudWatch native OTLP endpoint
-  otlphttp:
+  otlp_http:
     endpoint: "https://monitoring.__AWS_REGION__.amazonaws.com"
     auth:
       authenticator: sigv4auth
@@ -75,7 +75,7 @@ service:
     metrics:
       receivers: [otlp]
       processors: [attributes, resource, batch]
-      exporters: [otlphttp]
+      exporters: [otlp_http]
 
     # Drop logs and traces for now (Codex primarily sends metrics)
     logs:

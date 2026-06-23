@@ -61,12 +61,14 @@ or VPC. `deploy-otel-stack.sh` deploys only the dashboard:
   `aws sso login` credentials. Metrics land in CloudWatch Metrics, queryable
   via PromQL.
 - **CloudWatch dashboard** `CodexOnBedrock` (`codex-otel-dashboard.yaml`) —
-  scorecards, bar charts, ranked per-user leaderboards, and a session-source pie
-  covering tokens, per-user attribution, API requests, and activity. The
-  dashboard is rendered by a single custom-widget **Lambda**
-  (`lambda-functions/codex-widget/`) that queries the CloudWatch PromQL API and
-  returns HTML. The dashboard adds a Lambda + IAM role + an S3 artifact bucket
-  (deployed via `aws cloudformation package`).
+  scorecards, stacked line charts, ranked per-user leaderboards, and a
+  session-source pie covering tokens, per-user attribution, API requests, and
+  activity. Each widget is a native CloudWatch PromQL chart widget that queries
+  the CloudWatch OTLP Prometheus-compatible API. The four Overview scorecards
+  (Total Tokens, Active Users, Total Turns, API Requests) show rolling 24-hour
+  totals: each wraps its metric in `sum_over_time(...[1d])` so the value is the
+  sum across the last 24 hours. The line, bar, and pie widgets below plot the
+  metric across the dashboard's selected time range.
 
 OTLP metric ingestion is a one-time per-account enablement (`aws cloudwatch
 start-otel-enrichment` + `aws observabilityadmin start-telemetry-enrichment`);
@@ -101,10 +103,7 @@ additional CloudWatch dimensions.
 The live dashboard shows **token volume** (per user, per type, per model), not a
 dollar figure — token-count × list-price estimates drift from real billing. The
 ground truth for spend is **CUR (Layer 2)**, which carries per-user cost via
-`line_item_iam_principal`. If you want an on-dashboard dollar estimate, the
-widget Lambda (`lambda-functions/codex-widget/`) can be extended to multiply
-token counts by a configurable price; treat any such figure as an estimate and
-trust CUR when they disagree.
+`line_item_iam_principal`. The dashboard shows token volume; CUR (Layer 2) is the ground truth for spend.
 
 ### Quota alerts
 

@@ -256,11 +256,10 @@ Until both are enabled, the sidecar's exports are accepted but not stored.
 deployment/scripts/deploy-otel-stack.sh --region us-west-2
 ```
 
-This deploys only the `codex-otel-dashboard` stack — a custom-widget Lambda plus
-a CloudWatch dashboard that renders it. No networking/collector stacks are
-created. The script runs `aws cloudformation package` to upload the Lambda code,
-so it needs an S3 artifact bucket (one is created automatically if you don't
-pass `--artifact-bucket`).
+This deploys the `codex-otel-dashboard` stack: a single CloudWatch dashboard
+whose widgets are native PromQL chart widgets querying the CloudWatch OTLP
+Prometheus-compatible API. The stack contains only the
+`AWS::CloudWatch::Dashboard` resource.
 
 Useful flags:
 
@@ -269,7 +268,6 @@ Useful flags:
 | `--region` | Region metrics are ingested in (default `us-west-2`). Must match the sidecar's `sigv4auth` region. |
 | `--stack-prefix` | Rename the dashboard stack (default `codex-otel`). |
 | `--dashboard-name` | CloudWatch dashboard name (default `CodexOnBedrock`). |
-| `--artifact-bucket` | S3 bucket for the packaged widget Lambda code (auto-created if omitted). |
 
 ### 3. Build and configure the sidecar collector
 
@@ -300,10 +298,9 @@ exporter (the usage dashboard reads metrics; the default is `statsig`):
 [otel]
 environment = "production"
 
-[otel.metrics_exporter.otlp-http]
+[otel.metrics_exporter]
 # Full /v1/metrics path required — Codex does not append it.
-endpoint = "http://127.0.0.1:4318/v1/metrics"
-protocol = "binary"
+otlp-http = { endpoint = "http://127.0.0.1:4318/v1/metrics", protocol = "binary" }
 ```
 
 Metrics export is gated (only metrics, not logs/traces) behind `analytics.enabled`,

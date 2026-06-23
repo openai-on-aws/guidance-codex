@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BINARIES_DIR="$SCRIPT_DIR/../binaries"
-OTEL_VERSION="${OTEL_VERSION:-0.111.0}"
+OTEL_VERSION="${OTEL_VERSION:-0.154.0}"
 
 usage() {
   cat <<EOF
