@@ -372,9 +372,9 @@ agent_message | Amazon Bedrock AgentCore - AWS
                 https://aws.amazon.com/bedrock/agentcore/
 ```
 
-> Codex's hosted `web_search` tool type is **not** an alternative on this stack —
-> Bedrock Mantle rejects it. A Gateway MCP target is the only path to AgentCore's
-> web search.
+> Codex consumes AgentCore Web Search as a **Gateway MCP target**: it discovers the
+> `web-search-tool___WebSearch` tool through a standard `tools/list` call and invokes
+> it like any MCP tool, grounding answers in Amazon's web index with cited sources.
 
 ### 1. Deploy a web-search gateway (CloudFormation)
 
