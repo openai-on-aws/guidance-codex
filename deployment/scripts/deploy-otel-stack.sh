@@ -38,8 +38,6 @@ Common options:
                                otherwise uses the default credential chain)
   --stack-prefix PREFIX        Prefix for the dashboard stack (default: codex-otel)
   --dashboard-name NAME        CloudWatch dashboard name (default: CodexOnBedrock)
-  --artifact-bucket NAME       S3 bucket for the packaged widget Lambda code.
-                               Optional; a private bucket is created if omitted.
   -h, --help                   Show this help
 
 Example:
@@ -55,9 +53,8 @@ the metrics exporter pointed at the local sidecar:
   [otel]
   environment = "production"
 
-  [otel.metrics_exporter.otlp-http]
-  endpoint = "http://127.0.0.1:4318/v1/metrics"
-  protocol = "binary"
+  [otel.metrics_exporter]
+  otlp-http = { endpoint = "http://127.0.0.1:4318/v1/metrics", protocol = "binary" }
 
 The sidecar forwards to https://monitoring.<region>.amazonaws.com via SigV4.
 Account-level prerequisite: OTLP metric ingestion must be enabled once per
@@ -70,7 +67,6 @@ region="us-west-2"
 aws_profile=""
 prefix="codex-otel"
 dashboard_name="CodexOnBedrock"
-artifact_bucket=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -78,7 +74,6 @@ while [[ $# -gt 0 ]]; do
     --aws-profile) aws_profile="${2:?--aws-profile requires a value}"; shift 2;;
     --stack-prefix) prefix="${2:?--stack-prefix requires a value}"; shift 2;;
     --dashboard-name) dashboard_name="${2:?--dashboard-name requires a value}"; shift 2;;
-    --artifact-bucket) artifact_bucket="${2:?--artifact-bucket requires a value}"; shift 2;;
     -h|--help) usage; exit 0;;
     *) echo "Error: unknown flag: $1" >&2; echo "Run with --help for usage." >&2; exit 2;;
   esac
@@ -88,11 +83,9 @@ done
 # Pre-deployment validation
 # ----------------------------------------------------------------------------
 err()  { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; }
-warn() { printf '\033[1;33m[WARN]\033[0m %s\n' "$*" >&2; }
 log()  { printf '\033[1;34m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*"; }
 ok()   { printf '\033[1;32m[OK]\033[0m %s\n' "$*"; }
 
-# Apply --aws-profile by exporting AWS_PROFILE so all aws CLI calls pick it up.
 if [[ -n "$aws_profile" ]]; then
   export AWS_PROFILE="$aws_profile"
 fi
@@ -103,19 +96,16 @@ if ! command -v aws >/dev/null 2>&1; then
   exit 1
 fi
 
-# Region format: lowercase letters + digits, e.g. us-west-2, eu-central-1
 if ! [[ "$region" =~ ^[a-z]{2}-[a-z]+-[0-9]+$ ]]; then
   err "Invalid --region value: '$region' (expected format like 'us-west-2')."
   exit 1
 fi
 
-# Stack prefix sanity (CloudFormation stack-name allows [a-zA-Z][-a-zA-Z0-9]*)
 if ! [[ "$prefix" =~ ^[a-zA-Z][-a-zA-Z0-9]*$ ]]; then
   err "Invalid --stack-prefix '$prefix' (must match [a-zA-Z][-a-zA-Z0-9]*)."
   exit 1
 fi
 
-# Verify credentials work against the chosen region.
 if ! aws sts get-caller-identity --region "$region" >/dev/null 2>&1; then
   err "AWS credentials are not configured or do not have access in region '$region'."
   err "Try one of:"
@@ -125,7 +115,6 @@ if ! aws sts get-caller-identity --region "$region" >/dev/null 2>&1; then
   exit 1
 fi
 
-# Template must exist
 infra_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../infrastructure" && pwd)"
 if [[ ! -f "$infra_dir/codex-otel-dashboard.yaml" ]]; then
   err "CloudFormation template not found: $infra_dir/codex-otel-dashboard.yaml"
@@ -133,50 +122,19 @@ if [[ ! -f "$infra_dir/codex-otel-dashboard.yaml" ]]; then
 fi
 
 # ----------------------------------------------------------------------------
-# Deploy (dashboard only — sidecar collector is per-developer, not a stack)
-#
-# The dashboard uses a custom-widget Lambda, so the template has local Lambda
-# code that must be uploaded with `aws cloudformation package` first. That needs
-# an S3 bucket for the packaged artifact (--artifact-bucket, or one is created).
+# Deploy the dashboard stack (one AWS::CloudWatch::Dashboard resource)
 # ----------------------------------------------------------------------------
 dash_stack="${prefix}-dashboard"
-
-# Resolve / create an artifacts bucket for the packaged Lambda code.
-if [[ -z "$artifact_bucket" ]]; then
-  account_id=$(aws sts get-caller-identity --query Account --output text)
-  artifact_bucket="${prefix}-artifacts-${account_id}-${region}"
-  if ! aws s3api head-bucket --bucket "$artifact_bucket" --region "$region" >/dev/null 2>&1; then
-    log "Creating artifacts bucket: $artifact_bucket"
-    if [[ "$region" == "us-east-1" ]]; then
-      aws s3api create-bucket --bucket "$artifact_bucket" --region "$region" >/dev/null
-    else
-      aws s3api create-bucket --bucket "$artifact_bucket" --region "$region" \
-        --create-bucket-configuration LocationConstraint="$region" >/dev/null
-    fi
-    aws s3api put-public-access-block --bucket "$artifact_bucket" \
-      --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true >/dev/null
-  fi
-fi
-
-log "Packaging dashboard Lambda code → s3://$artifact_bucket"
-packaged_template="$(mktemp -t codex-otel-dashboard.XXXXXX.yaml)"
-aws cloudformation package \
-  --region "$region" \
-  --template-file "$infra_dir/codex-otel-dashboard.yaml" \
-  --s3-bucket "$artifact_bucket" \
-  --output-template-file "$packaged_template" >/dev/null
 
 log "Deploying dashboard stack: $dash_stack (region $region)"
 aws cloudformation deploy \
   --region "$region" \
   --stack-name "$dash_stack" \
-  --template-file "$packaged_template" \
-  --capabilities CAPABILITY_IAM \
+  --template-file "$infra_dir/codex-otel-dashboard.yaml" \
   --parameter-overrides \
       DashboardName="$dashboard_name" \
       MetricsRegion="$region" \
-  --no-fail-on-empty-changeset >/dev/null
-rm -f "$packaged_template"
+  --no-fail-on-empty-changeset
 ok "dashboard ready"
 
 dashboard_url=$(aws cloudformation describe-stacks --region "$region" --stack-name "$dash_stack" \
@@ -205,9 +163,8 @@ Next steps — set up the per-developer sidecar:
        [otel]
        environment = "production"
 
-       [otel.metrics_exporter.otlp-http]
-       endpoint = "http://127.0.0.1:4318/v1/metrics"
-       protocol = "binary"
+       [otel.metrics_exporter]
+       otlp-http = { endpoint = "http://127.0.0.1:4318/v1/metrics", protocol = "binary" }
 
   4. Ensure their IAM role/permission set allows cloudwatch:PutMetricData.
   5. One-time per account: enable OTLP metric ingestion with

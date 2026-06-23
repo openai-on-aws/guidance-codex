@@ -1,11 +1,8 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  Codex on Bedrock — CloudWatch custom-widget dashboard. A single parameterized
-  Lambda renders each widget (scorecards, bars, ranked tables, pie) by querying
-  the CloudWatch native OTLP Prometheus-compatible API. Custom widgets are used
-  because CloudWatch's built-in PromQL chart widget renders unreliably above a
-  small widget count / when view types are mixed; the Lambda renders HTML the
-  console simply displays.
+  Codex on Bedrock — CloudWatch dashboard. Each widget is a native PromQL chart
+  widget that queries the CloudWatch OTLP Prometheus-compatible API. The four
+  Overview scorecards show rolling 24-hour totals via sum_over_time(...[1d]).
 
 Parameters:
   DashboardName:
@@ -19,96 +16,133 @@ Parameters:
     Description: Region where OTLP metrics are ingested (sidecar sigv4auth region).
 
 Resources:
-  WidgetFunctionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: QueryOtlpMetrics
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              # The widget Lambda queries the CloudWatch native OTLP
-              # Prometheus-compatible API (monitoring.<region>.amazonaws.com,
-              # SigV4 service "monitoring"). That endpoint authorizes against
-              # cloudwatch:GetMetricData / cloudwatch:ListMetrics — NOT aps:*.
-              - Effect: Allow
-                Action:
-                  - cloudwatch:GetMetricData
-                  - cloudwatch:ListMetrics
-                Resource: '*'
-
-  WidgetFunction:
-    Type: AWS::Lambda::Function
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W89
-            reason: Dashboard widget Lambda queries a public AWS API only; no VPC resources are accessed.
-          - id: W92
-            reason: Reserved concurrency is unnecessary for an interactive, on-demand dashboard widget.
-    Properties:
-      FunctionName: !Sub '${AWS::StackName}-codex-widget'
-      Runtime: python3.12
-      Handler: index.lambda_handler
-      Timeout: 30
-      MemorySize: 256
-      Role: !GetAtt WidgetFunctionRole.Arn
-      Environment:
-        Variables:
-          METRICS_REGION: !Ref MetricsRegion
-      # `aws cloudformation package` rewrites this local path to the S3 artifact.
-      Code: lambda-functions/codex-widget
-
-  # CloudWatch custom widgets invoke the Lambda; allow the CloudWatch principal.
-  WidgetInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !GetAtt WidgetFunction.Arn
-      Action: lambda:InvokeFunction
-      Principal: lambda.amazonaws.com
-
   Dashboard:
     Type: AWS::CloudWatch::Dashboard
     Properties:
       DashboardName: !Ref DashboardName
-      DashboardBody: !Sub
-        - |
-          {
-            "widgets": [
-              {"type":"text","x":0,"y":0,"width":24,"height":1,"properties":{"markdown":"# Overview"}},
-              {"type":"custom","x":0,"y":1,"width":6,"height":3,"properties":{"title":"Total Tokens","endpoint":"${Fn}","updateOn":{"refresh":true,"resize":true,"timeRange":true},"params":{"query":"sum(histogram_sum({\"codex.turn.token_usage\", \"@instrumentation.@name\"=\"codex\"}))","render":"number","unit":"tokens"}}},
-              {"type":"custom","x":6,"y":1,"width":6,"height":3,"properties":{"title":"Active Users","endpoint":"${Fn}","updateOn":{"refresh":true,"resize":true,"timeRange":true},"params":{"query":"count(group by (\"user.id\")({\"codex.turn.token_usage\", \"@instrumentation.@name\"=\"codex\"}))","render":"number","unit":"users"}}},
-              {"type":"custom","x":12,"y":1,"width":6,"height":3,"properties":{"title":"Total Turns","endpoint":"${Fn}","updateOn":{"refresh":true,"resize":true,"timeRange":true},"params":{"query":"sum({\"codex.conversation.turn.count\", \"@instrumentation.@name\"=\"codex\"})","render":"number","unit":"turns"}}},
-              {"type":"custom","x":18,"y":1,"width":6,"height":3,"properties":{"title":"API Requests","endpoint":"${Fn}","updateOn":{"refresh":true,"resize":true,"timeRange":true},"params":{"query":"sum({\"codex.api_request\", \"@instrumentation.@name\"=\"codex\"})","render":"number","unit":"reqs"}}},
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {"type":"text","x":0,"y":0,"width":24,"height":1,"properties":{"markdown":"# Overview — rolling 24h totals"}},
+            {
+              "type":"chart","x":0,"y":1,"width":6,"height":3,
+              "properties":{
+                "title":"Total Tokens","region":"${MetricsRegion}","view":"number",
+                "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
+                  "query":"sum(histogram_sum(sum_over_time({\"codex.turn.token_usage\", \"@instrumentation.@name\"=\"codex\"}[1d])))"}]},
+                "plotOptions":{"legend":{"position":"bottom","show":false},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
+                  "style":{"lineOptions":{"filled":false,"stacked":false,"width":2,"pattern":"solid","spline":false},
+                    "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
+              }
+            },
+            {
+              "type":"chart","x":6,"y":1,"width":6,"height":3,
+              "properties":{
+                "title":"Active Users","region":"${MetricsRegion}","view":"number",
+                "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
+                  "query":"count(group by (\"user.id\")(count_over_time({\"codex.turn.token_usage\", \"@instrumentation.@name\"=\"codex\"}[1d])))"}]},
+                "plotOptions":{"legend":{"position":"bottom","show":false},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
+                  "style":{"lineOptions":{"filled":false,"stacked":false,"width":2,"pattern":"solid","spline":false},
+                    "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
+              }
+            },
+            {
+              "type":"chart","x":12,"y":1,"width":6,"height":3,
+              "properties":{
+                "title":"Total Turns","region":"${MetricsRegion}","view":"number",
+                "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
+                  "query":"sum(sum_over_time({\"codex.conversation.turn.count\", \"@instrumentation.@name\"=\"codex\"}[1d]))"}]},
+                "plotOptions":{"legend":{"position":"bottom","show":false},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
+                  "style":{"lineOptions":{"filled":false,"stacked":false,"width":2,"pattern":"solid","spline":false},
+                    "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
+              }
+            },
+            {
+              "type":"chart","x":18,"y":1,"width":6,"height":3,
+              "properties":{
+                "title":"API Requests","region":"${MetricsRegion}","view":"number",
+                "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
+                  "query":"sum(sum_over_time({\"codex.api_request\", \"@instrumentation.@name\"=\"codex\"}[1d]))"}]},
+                "plotOptions":{"legend":{"position":"bottom","show":false},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
+                  "style":{"lineOptions":{"filled":false,"stacked":false,"width":2,"pattern":"solid","spline":false},
+                    "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
+              }
+            },
+            {"type":"text","x":0,"y":4,"width":24,"height":1,"properties":{"markdown":"# Token Usage"}},
+            {
+              "type":"chart","x":0,"y":5,"width":12,"height":6,
+              "properties":{
+                "title":"Tokens by type","region":"${MetricsRegion}","view":"line",
+                "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
+                  "query":"sum by (token_type)(histogram_sum({\"codex.turn.token_usage\", \"@instrumentation.@name\"=\"codex\"}))"}]},
+                "plotOptions":{"legend":{"position":"bottom","show":true},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
+                  "style":{"lineOptions":{"filled":true,"stacked":true,"width":2,"pattern":"solid","spline":false},
+                    "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
+              }
+            },
+            {
+              "type":"chart","x":12,"y":5,"width":12,"height":6,
+              "properties":{
+                "title":"Tokens by model","region":"${MetricsRegion}","view":"line",
+                "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
+                  "query":"topk(10, sum by (model)(histogram_sum({\"codex.turn.token_usage\", \"@instrumentation.@name\"=\"codex\"})))"}]},
+                "plotOptions":{"legend":{"position":"bottom","show":true},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
+                  "style":{"lineOptions":{"filled":true,"stacked":true,"width":2,"pattern":"solid","spline":false},
+                    "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
+              }
+            },
 
-              {"type":"text","x":0,"y":4,"width":24,"height":1,"properties":{"markdown":"# Token Usage"}},
-              {"type":"custom","x":0,"y":5,"width":12,"height":6,"properties":{"title":"Tokens by type","endpoint":"${Fn}","updateOn":{"refresh":true,"resize":true,"timeRange":true},"params":{"query":"sum by (token_type)(histogram_sum({\"codex.turn.token_usage\", \"@instrumentation.@name\"=\"codex\"}))","render":"bar"}}},
-              {"type":"custom","x":12,"y":5,"width":12,"height":6,"properties":{"title":"Tokens by model","endpoint":"${Fn}","updateOn":{"refresh":true,"resize":true,"timeRange":true},"params":{"query":"topk(10, sum by (model)(histogram_sum({\"codex.turn.token_usage\", \"@instrumentation.@name\"=\"codex\"})))","render":"bar"}}},
+            {"type":"text","x":0,"y":11,"width":24,"height":1,"properties":{"markdown":"# Per-User Attribution"}},
+            {
+              "type":"chart","x":0,"y":12,"width":12,"height":6,
+              "properties":{
+                "title":"Top users by tokens","region":"${MetricsRegion}","view":"line",
+                "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
+                  "query":"topk(25, sum by (\"user.id\")(histogram_sum({\"codex.turn.token_usage\", \"@instrumentation.@name\"=\"codex\"})))"}]},
+                "plotOptions":{"legend":{"position":"bottom","show":true},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
+                  "style":{"lineOptions":{"filled":false,"stacked":false,"width":2,"pattern":"solid","spline":false},
+                    "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
+              }
+            },
+            {
+              "type":"chart","x":12,"y":12,"width":12,"height":6,
+              "properties":{
+                "title":"Top users by API requests","region":"${MetricsRegion}","view":"line",
+                "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
+                  "query":"topk(25, sum by (\"user.id\")({\"codex.api_request\", \"@instrumentation.@name\"=\"codex\"}))"}]},
+                "plotOptions":{"legend":{"position":"bottom","show":true},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
+                  "style":{"lineOptions":{"filled":false,"stacked":false,"width":2,"pattern":"solid","spline":false},
+                    "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
+              }
+            },
 
-              {"type":"text","x":0,"y":11,"width":24,"height":1,"properties":{"markdown":"# Per-User Attribution"}},
-              {"type":"custom","x":0,"y":12,"width":12,"height":6,"properties":{"title":"Top users by tokens","endpoint":"${Fn}","updateOn":{"refresh":true,"resize":true,"timeRange":true},"params":{"query":"topk(25, sum by (\"user.id\")(histogram_sum({\"codex.turn.token_usage\", \"@instrumentation.@name\"=\"codex\"})))","render":"table","unit":"tokens","dim":"User"}}},
-              {"type":"custom","x":12,"y":12,"width":12,"height":6,"properties":{"title":"Top users by API requests","endpoint":"${Fn}","updateOn":{"refresh":true,"resize":true,"timeRange":true},"params":{"query":"topk(25, sum by (\"user.id\")({\"codex.api_request\", \"@instrumentation.@name\"=\"codex\"}))","render":"table","unit":"requests","dim":"User"}}},
-
-              {"type":"text","x":0,"y":18,"width":24,"height":1,"properties":{"markdown":"# Activity"}},
-              {"type":"custom","x":0,"y":19,"width":12,"height":6,"properties":{"title":"Top users by tool calls","endpoint":"${Fn}","updateOn":{"refresh":true,"resize":true,"timeRange":true},"params":{"query":"topk(25, sum by (\"user.id\")(histogram_count({\"codex.turn.tool.call\", \"@instrumentation.@name\"=\"codex\"})))","render":"table","unit":"calls","dim":"User"}}},
-              {"type":"custom","x":12,"y":19,"width":12,"height":6,"properties":{"title":"Threads by session source","endpoint":"${Fn}","updateOn":{"refresh":true,"resize":true,"timeRange":true},"params":{"query":"sum by (session_source)({\"codex.thread.started\", \"@instrumentation.@name\"=\"codex\"})","render":"pie"}}}
-            ]
-          }
-        - Fn: !GetAtt WidgetFunction.Arn
+            {"type":"text","x":0,"y":18,"width":24,"height":1,"properties":{"markdown":"# Activity"}},
+            {
+              "type":"chart","x":0,"y":19,"width":12,"height":6,
+              "properties":{
+                "title":"Top users by tool calls","region":"${MetricsRegion}","view":"line",
+                "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
+                  "query":"topk(25, sum by (\"user.id\")(histogram_count({\"codex.turn.tool.call\", \"@instrumentation.@name\"=\"codex\"})))"}]},
+                "plotOptions":{"legend":{"position":"bottom","show":true},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
+                  "style":{"lineOptions":{"filled":false,"stacked":false,"width":2,"pattern":"solid","spline":false},
+                    "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
+              }
+            },
+            {
+              "type":"chart","x":12,"y":19,"width":12,"height":6,
+              "properties":{
+                "title":"Threads by session source","region":"${MetricsRegion}","view":"pie",
+                "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
+                  "query":"sum by (session_source)({\"codex.thread.started\", \"@instrumentation.@name\"=\"codex\"})"}]},
+                "plotOptions":{"legend":{"position":"bottom","show":true},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
+                  "style":{"lineOptions":{"filled":true,"stacked":true,"width":2,"pattern":"solid","spline":false},
+                    "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
+              }
+            }
+          ]
+        }
 
 Outputs:
   DashboardURL:
     Description: Direct link to the dashboard in CloudWatch.
     Value: !Sub 'https://${MetricsRegion}.console.aws.amazon.com/cloudwatch/home?region=${MetricsRegion}#dashboards/dashboard/${DashboardName}'
-  WidgetFunctionArn:
-    Description: ARN of the custom-widget Lambda.
-    Value: !GetAtt WidgetFunction.Arn

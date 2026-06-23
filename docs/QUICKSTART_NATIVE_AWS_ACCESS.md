@@ -443,10 +443,9 @@ otherwise). Append to `~/.codex/config.toml`:
 [otel]
 environment = "production"
 
-[otel.metrics_exporter.otlp-http]
+[otel.metrics_exporter]
 # Include the full /v1/metrics path — Codex does not append it for you.
-endpoint = "http://127.0.0.1:4318/v1/metrics"
-protocol = "binary"
+otlp-http = { endpoint = "http://127.0.0.1:4318/v1/metrics", protocol = "binary" }
 ```
 
 Codex exports to the local sidecar, which SigV4-signs and forwards to

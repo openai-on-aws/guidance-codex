@@ -42,18 +42,14 @@ landing page.
 | Template                       | Purpose                                                                  |
 | ------------------------------ | ------------------------------------------------------------------------ |
 | `networking.yaml`              | VPC, two public subnets, IGW. Used by the LiteLLM gateway ECS stack (not the native-access monitoring path, which is collector-less). |
-| `codex-otel-dashboard.yaml`    | CloudWatch dashboard for the native-access **local sidecar** path. A single custom-widget **Lambda** (`lambda-functions/codex-widget/`) queries the CloudWatch PromQL API and renders scorecards, bar charts, ranked per-user tables, and a session-source pie. **Requires packaging** — deploy with `deployment/scripts/deploy-otel-stack.sh` (it runs `aws cloudformation package`). |
+| `codex-otel-dashboard.yaml`    | CloudWatch dashboard for the native-access **local sidecar** path. Each widget is a native PromQL chart widget querying the CloudWatch OTLP Prometheus-compatible API. Deploy with `deployment/scripts/deploy-otel-stack.sh`. |
 | `litellm-dashboard.yaml`       | CloudWatch dashboard for the LiteLLM gateway.                            |
 
 ### Artifacts
 
 | Template          | Purpose                                                                  |
 | ----------------- | ------------------------------------------------------------------------ |
-| `s3bucket.yaml`   | S3 bucket for CloudFormation Lambda code packages and artifacts.         |
-
-The `lambda-functions/` subdirectory contains the source for the
-`codex-widget` Lambda referenced by `codex-otel-dashboard.yaml`; it is not
-itself a CloudFormation template.
+| `s3bucket.yaml`   | S3 bucket for CloudFormation artifacts (optional; not required by any template in this directory). |
 
 The LiteLLM gateway ECS stack (`litellm-ecs.yaml`) lives outside this
 directory at `deployment/litellm/ecs/litellm-ecs.yaml` because it depends on
@@ -63,10 +59,6 @@ infrastructure.
 ## Deployment Order and Dependencies
 
 ```
-                  ┌──────────────────┐
-                  │ s3bucket.yaml    │  (artifacts, optional but recommended
-                  └──────────────────┘   if templates use packaged Lambdas)
-
   Native AWS Access path                     LLM Gateway path
   ─────────────────────                       ────────────────
   bedrock-auth-idc.yaml                       networking.yaml

@@ -98,17 +98,21 @@ regardless of how you deployed.
 > on the developer machine.
 
 ### No metrics in CloudWatch after a Codex session
-- **Check the `[otel.metrics_exporter.otlp-http]` block first.** `~/.codex/config.toml`
+- **Check the `[otel.metrics_exporter]` block first.** `~/.codex/config.toml`
   must point the **metrics** exporter at the sidecar with the full `/v1/metrics`
-  path (`endpoint = "http://127.0.0.1:4318/v1/metrics"`, Codex does not append it).
-  A missing block means metrics default to the `statsig` exporter, not your collector.
+  path. Codex does not append it. A missing block means metrics default to the
+  `statsig` exporter, not your collector. The correct format is:
+  ```toml
+  [otel.metrics_exporter]
+  otlp-http = { endpoint = "http://127.0.0.1:4318/v1/metrics", protocol = "binary" }
+  ```
 - **Check the `analytics.enabled` metrics gate.** Codex gates **metrics** export
   (only metrics — logs/traces are unaffected) behind `analytics.enabled`. Both
   `codex exec` and the TUI default it to `true`, so metrics normally flow; but if a
   user, managed, or org config sets `[analytics] enabled = false`, the sidecar looks
   healthy while no metrics arrive. Confirm it is not disabled.
 - **Checklist:**
-  1. `[otel.metrics_exporter.otlp-http]` block present with the full `/v1/metrics`
+  1. `[otel.metrics_exporter]` block present with the full `/v1/metrics`
      endpoint (see above).
   2. `[analytics] enabled` is not set to `false` anywhere in the config layers.
   3. A clean `codex exec` turn flushes on exit. If a run may exit via an error path

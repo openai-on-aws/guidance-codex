@@ -29,10 +29,13 @@ echo "----------------------------"
 # [analytics] enabled = false somewhere in the config layers.
 CODEX_CONFIG="${CODEX_HOME:-$HOME/.codex}/config.toml"
 if [ -f "$CODEX_CONFIG" ]; then
-  if grep -q '\[otel.metrics_exporter.otlp-http\]' "$CODEX_CONFIG"; then
-    echo "✓ [otel.metrics_exporter.otlp-http] configured"
+  if grep -q 'otlp-http' "$CODEX_CONFIG"; then
+    echo "✓ otel.metrics_exporter otlp-http configured"
   else
-    echo "✗ [otel.metrics_exporter.otlp-http] missing — metrics default to statsig, not the sidecar"
+    echo "✗ otel.metrics_exporter otlp-http missing — metrics default to statsig, not the sidecar"
+    echo "  Add to ~/.codex/config.toml:"
+    echo "    [otel.metrics_exporter]"
+    echo "    otlp-http = { endpoint = \"http://127.0.0.1:4318/v1/metrics\", protocol = \"binary\" }"
   fi
   if grep -Eq '^[[:space:]]*enabled[[:space:]]*=[[:space:]]*false' "$CODEX_CONFIG"; then
     echo "✗ analytics appears DISABLED ([analytics] enabled = false) — this suppresses"
@@ -83,7 +86,10 @@ echo "------------------------------------------------------------"
 #   https://monitoring.<region>.amazonaws.com/api/v1/query
 # It requires SigV4-signed requests. `awscurl` signs automatically; if it is not
 # installed we print the manual instruction rather than guessing an unsigned call.
-PROM_QUERY='sum(histogram_sum({"codex.turn.token_usage", "@instrumentation.@name"="codex"}))'
+# Codex emits delta-temporality metrics: a bare instant query returns empty at any
+# instant without a datapoint. Wrap in sum_over_time([1d]) so the check reliably
+# finds data emitted any time in the last 24h (matches the dashboard tile queries).
+PROM_QUERY='sum(histogram_sum(sum_over_time({"codex.turn.token_usage", "@instrumentation.@name"="codex"}[1d])))'
 PROM_URL="https://monitoring.${REGION}.amazonaws.com/api/v1/query"
 if command -v awscurl >/dev/null 2>&1; then
   echo "Querying: ${PROM_QUERY}"
