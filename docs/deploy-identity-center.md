@@ -105,13 +105,13 @@ chat, internal wiki) or package them and upload to S3 with a presigned URL.
 **AWS CLI profile** — append to `~/.aws/config`:
 
 ```ini
-[sso-session codex]
+[sso-session codex-bedrock-sso]
 sso_start_url = https://d-xxxxxxxxxx.awsapps.com/start
 sso_region = us-east-1
 sso_registration_scopes = sso:account:access
 
-[profile codex]
-sso_session = codex
+[profile codex-bedrock]
+sso_session = codex-bedrock-sso
 sso_account_id = 123456789012
 sso_role_name = CodexBedrockUser
 region = us-west-2
@@ -123,13 +123,14 @@ region = us-west-2
 model_provider = "amazon-bedrock"
 model = "openai.gpt-5.4"
 
-[model_providers.amazon-bedrock]
-name = "Amazon Bedrock"
-
 [model_providers.amazon-bedrock.aws]
 region = "us-west-2"
-profile = "codex"
+profile = "codex-bedrock"
 ```
+
+> Keep `[model_providers.amazon-bedrock.aws]` to `region` and `profile` — those
+> are the keys the built-in `amazon-bedrock` provider reads, and limiting the
+> block to them keeps Codex startup clean (verified on Codex 0.142.2).
 
 Keep provider settings in user-level `~/.codex/config.toml`; Codex ignores
 `model_provider` and `model_providers` in project-local `.codex/config.toml`
@@ -148,7 +149,7 @@ providers), see the
 ```bash
 # Append the AWS profile snippet to ~/.aws/config and the [model_providers...]
 # block to ~/.codex/config.toml as shown above.
-aws sso login --profile codex
+aws sso login --profile codex-bedrock
 codex                  # AWS_PROFILE is resolved via the [model_providers.amazon-bedrock.aws] block
 ```
 
@@ -162,7 +163,7 @@ hosts — bastions, EC2 dev boxes, SSH-only field laptops, CI runners — use th
 device-code flow instead:
 
 ```bash
-aws sso login --profile codex --no-browser
+aws sso login --profile codex-bedrock --no-browser
 # Prints a verification URL + one-time code.
 # Open the URL on any device where you can sign in to your IdP,
 # enter the code, approve. Back on the headless host, the command
@@ -173,6 +174,14 @@ Pre-warm the cache with `--no-browser` before starting Codex; re-run when the
 8-hour token expires. Fully non-interactive fleet/CI pre-warming is not yet
 supported.
 
+### Seamless auto-login (optional)
+
+To remove the manual `aws sso login` step entirely — so the browser pops
+automatically when the token expires and Codex never sees a credentials error —
+wire the profile's `credential_process` to the bundled helper. This works on
+macOS, Linux, and Windows (incl. headless/device-code). See
+[credential-helper-auto-login.md](credential-helper-auto-login.md).
+
 ### `aws login` (console-login) profiles
 
 Codex ≥ 0.130.0 also resolves credentials from `aws login` console-login
@@ -180,21 +189,21 @@ profiles (`login_session`) via the standard AWS SDK credential chain.
 
 ### Uninstall
 
-Remove the `[sso-session codex]` and `[profile codex]` blocks from
+Remove the `[sso-session codex-bedrock-sso]` and `[profile codex-bedrock]` blocks from
 `~/.aws/config`, then remove the `[model_providers.amazon-bedrock]` block (and
 optional `[otel]` block) from `~/.codex/config.toml`. Take a timestamped
 backup of each file first. To revoke any cached SSO tokens, run
-`aws sso logout --profile codex`.
+`aws sso logout --profile codex-bedrock`.
 
 ## Validation
 
 ```bash
-aws sso login --profile codex
-aws sts get-caller-identity --profile codex
+aws sso login --profile codex-bedrock
+aws sts get-caller-identity --profile codex-bedrock
 # Expect: Arn: arn:aws:sts::<account>:assumed-role/AWSReservedSSO_CodexBedrockUser_.../<sso-user>
 
 aws bedrock-runtime converse \
-  --profile codex --region us-west-2 \
+  --profile codex-bedrock --region us-west-2 \
   --model-id openai.gpt-oss-120b-1:0 \
   --messages '[{"role":"user","content":[{"text":"OK?"}]}]'
 ```
@@ -283,7 +292,7 @@ otelcol-local-<platform> --config otel-local-config.yaml
 ```
 
 Resolve the SSO identity for a logged-in profile with
-`aws sts get-caller-identity --profile codex --query Arn` (the SSO username
+`aws sts get-caller-identity --profile codex-bedrock --query Arn` (the SSO username
 follows the final `/` of the assumed-role ARN). Use that value for
 `__USER_EMAIL__` / `__USER_ID__`.
 

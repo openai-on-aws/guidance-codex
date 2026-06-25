@@ -7,6 +7,14 @@ Deploy Codex on Bedrock with IAM Identity Center authentication in 5-60 minutes 
 - You're willing to set up IdC + SAML federation, AND
 - Soft monitoring (alerts, not blocking) is sufficient
 
+> **Which doc do I read?** Start here — this is the runbook.
+> [deploy-identity-center.md](deploy-identity-center.md) is the technical
+> deep-dive (CloudTrail attribution, quotas, session tuning) for the same path.
+> **If you want seamless login** — the browser pops automatically when your token
+> expires, so the daily loop is just `codex` — follow
+> [credential-helper-auto-login.md](credential-helper-auto-login.md) in place of
+> the [Developer Configuration](#developer-configuration) section below.
+
 ---
 
 ## Overview
@@ -263,6 +271,12 @@ region = "us-west-2"
 profile = "codex-bedrock"
 ```
 
+> Keep `[model_providers.amazon-bedrock.aws]` to `region` and `profile` — the two
+> keys the built-in provider reads — so Codex starts cleanly (verified on Codex
+> 0.142.2). Point `aws.region` at a region that serves your model: `openai.gpt-5.4`
+> on the Codex Bedrock (Mantle) path is verified in `us-east-1`, so calls there
+> resolve promptly.
+
 This guide keeps `openai.gpt-5.4` in the sample because the walkthrough uses
 `us-west-2`. OpenAI recommends the latest GPT-5 family model for Codex, so if
 you deploy in `us-east-2`, switch the snippet to `model = "openai.gpt-5.5"`
@@ -318,6 +332,12 @@ codex                                    # use Codex normally — SigV4 is autom
   user and nothing to rotate — re-auth is always against your corporate IdP.
 - **Nothing to refresh manually:** Codex + the AWS SDK manage credential loading and
   expiry from the profile; you only re-run `aws sso login` when prompted.
+
+> **Want to skip the manual `aws sso login` entirely?** The optional credential
+> helper triggers the browser login automatically when the token expires, so the
+> daily loop becomes just `codex`. macOS, Linux, and Windows (incl. headless
+> device-code) are supported — see
+> [credential-helper-auto-login.md](credential-helper-auto-login.md).
 
 ---
 

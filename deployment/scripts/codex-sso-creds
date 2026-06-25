@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# credential_process helper for Codex-on-Bedrock SSO profiles.
+#
+# The AWS SDK invokes this from the profile's credential_process. If the cached
+# SSO token is valid, we return credentials immediately. If it's missing or
+# expired, we trigger `aws sso login` and then return credentials. This keeps
+# Codex unaware of the auth state — users just see a browser pop (or, on a
+# headless host, a device-code prompt on stderr) once per working day.
+#
+# On a desktop with a browser, `aws sso login` opens the SSO start URL
+# automatically. On a headless host (SSH session, no DISPLAY, no browser
+# opener), we fall back to `--use-device-code` so the user can complete the
+# flow on another device using the verification URL+code printed to stderr.
+#
+# Contract: ONLY the credential JSON is written to stdout. All login chatter,
+# device-code prompts, and errors go to stderr.
+#
+# Args: $1 = AWS profile name, $2 = sso-session name
+set -euo pipefail
+
+PROFILE="${1:?profile name required}"
+SESSION="${2:?sso-session name required}"
+
+# Resolve aws binary even when launched from GUI apps (Dock, VS Code) that may
+# not inherit a full PATH.
+AWS_BIN="$(command -v aws || true)"
+if [[ -z "$AWS_BIN" ]]; then
+  for p in /opt/homebrew/bin/aws /usr/local/bin/aws /usr/bin/aws; do
+    if [[ -x "$p" ]]; then AWS_BIN="$p"; break; fi
+  done
+fi
+if [[ -z "$AWS_BIN" ]]; then
+  echo "aws CLI not found on PATH" >&2
+  exit 1
+fi
+
+# Some GUI launchers strip HOME; recover it so the AWS CLI can find ~/.aws.
+if [[ -z "${HOME:-}" ]]; then
+  HOME="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6 || true)"
+  [[ -z "$HOME" ]] && HOME="$(eval echo "~$(id -un)")"
+  export HOME
+fi
+
+emit_creds() {
+  "$AWS_BIN" configure export-credentials --profile "$PROFILE" --format process
+}
+
+# Fast path: cached token still valid.
+if emit_creds 2>/dev/null; then
+  exit 0
+fi
+
+# Decide whether to use the browser flow or the device-code flow.
+#
+# Heuristics for "headless" (no usable browser):
+#   * SSH_CONNECTION / SSH_TTY / SSH_CLIENT set → remote shell, no local browser.
+#   * Linux without $DISPLAY and without $WAYLAND_DISPLAY → no graphical session.
+#   * macOS without an Aqua session (launchctl reports no GUI) → likely a
+#     remote/ssh session or a daemon context.
+#   * No known browser opener on PATH (open / xdg-open / wslview).
+is_headless() {
+  if [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_TTY:-}" || -n "${SSH_CLIENT:-}" ]]; then
+    return 0
+  fi
+  case "$(uname -s)" in
+    Linux)
+      if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+        return 0
+      fi
+      if ! command -v xdg-open >/dev/null 2>&1 && ! command -v wslview >/dev/null 2>&1; then
+        return 0
+      fi
+      ;;
+    Darwin)
+      if ! command -v open >/dev/null 2>&1; then
+        return 0
+      fi
+      # `launchctl managername` prints "Aqua" inside a GUI login session and
+      # something else (e.g. "Background", "StandardIO") under ssh/daemon.
+      if command -v launchctl >/dev/null 2>&1; then
+        local mgr
+        mgr="$(launchctl managername 2>/dev/null || true)"
+        if [[ -n "$mgr" && "$mgr" != "Aqua" ]]; then
+          return 0
+        fi
+      fi
+      ;;
+    *)
+      # Unknown OS — be conservative and prefer device code.
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+LOGIN_ARGS=(sso login --sso-session "$SESSION")
+if is_headless; then
+  LOGIN_ARGS+=(--use-device-code)
+fi
+
+# Token missing or expired — launch login (stdout muted to preserve the
+# JSON-only contract), then retry.
+"$AWS_BIN" "${LOGIN_ARGS[@]}" >&2
+emit_creds
