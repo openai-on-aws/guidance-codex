@@ -102,7 +102,12 @@ Question 1: Do you need HARD quota enforcement?
 2. Authenticate with existing credentials (Okta, Azure AD, Google, etc.)
 3. Use Codex normally — credentials handled automatically by AWS CLI
 
-**No custom executables. No credential helpers. No Python required.**
+**No custom executables. No credential helpers required. No Python required.**
+
+> Want the `aws sso login` step to happen automatically? An optional
+> `credential_process` helper script makes IdC login seamless — the daily loop
+> becomes just `codex`. See
+> [credential-helper-auto-login.md](docs/credential-helper-auto-login.md).
 
 ### Architecture
 
