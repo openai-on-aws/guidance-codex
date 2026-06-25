@@ -4,13 +4,21 @@ This optional helper makes IdC sign-in automatic. It wires the profile's
 `credential_process` to a small script that returns cached credentials while the
 token is valid and **triggers `aws sso login` on demand** when a fresh token is
 needed. Codex resolves credentials through the standard AWS SDK chain, so the
-developer's daily loop becomes simply `codex` — a browser pops (or a device-code
-prompt appears on headless hosts) once per working day, and every call after that
-is silent until the token expires.
+developer's daily loop becomes simply launching Codex — a browser pops (or a
+device-code prompt appears on headless hosts) once per working day, and every
+call after that is silent until the token expires.
 
 The helper uses the AWS SDK's own `credential_process` mechanism, configured in
 `~/.aws/config`, so it works with the built-in `amazon-bedrock` provider exactly
 as it works for any AWS SDK consumer.
+
+**This covers the CLI, the IDE extension, and the desktop app alike.** All Codex
+surfaces read the same user-level `~/.codex/config.toml` and resolve Bedrock
+credentials through the same AWS SDK chain, so the helper fires no matter how
+Codex is launched — there is nothing IDE- or app-specific to configure. (In a
+remote IDE session — Remote-SSH, a devcontainer, or Codespaces — credentials
+resolve on the *remote* host, which is browser-less; follow the
+[headless](#headless--ssh--ci-hosts) pre-warm path there.)
 
 ## Before you start
 

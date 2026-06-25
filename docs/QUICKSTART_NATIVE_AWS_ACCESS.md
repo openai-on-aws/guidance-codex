@@ -335,8 +335,10 @@ codex                                    # use Codex normally — SigV4 is autom
 
 > **Want to skip the manual `aws sso login` entirely?** The optional credential
 > helper triggers the browser login automatically when the token expires, so the
-> daily loop becomes just `codex`. macOS, Linux, and Windows (incl. headless
-> device-code) are supported — see
+> daily loop becomes just launching Codex — from the CLI, the IDE extension, or
+> the desktop app alike, since all read the same `~/.codex/config.toml` and AWS
+> credential chain. macOS, Linux, and Windows (incl. headless device-code) are
+> supported — see
 > [credential-helper-auto-login.md](credential-helper-auto-login.md).
 
 ---
