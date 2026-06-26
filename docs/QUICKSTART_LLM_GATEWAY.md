@@ -200,7 +200,7 @@ No other AWS resources required.
 
 - **Pattern documentation:** [QUICKSTART.md](../QUICKSTART.md)
 - **Gateway-specific issues:** See your chosen gateway's implementation guide
-- **General issues:** [GitHub Issues](https://github.com/aws-samples/sample-openai-on-aws/issues)
+- **General issues:** [GitHub Issues](https://github.com/openai-on-aws/guidance-codex/issues)
 - **Codex configuration:** [OpenAI Codex docs](https://developers.openai.com/codex/config-advanced)
 
 ---

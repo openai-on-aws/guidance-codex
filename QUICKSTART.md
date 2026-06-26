@@ -400,7 +400,7 @@ Yes, single-digit milliseconds (typically <10ms) as requests route through the g
 
 **Where do I report issues?**
 
-→ [GitHub Issues](https://github.com/aws-samples/sample-openai-on-aws/issues)
+→ [GitHub Issues](https://github.com/openai-on-aws/guidance-codex/issues)
 
 ---
 

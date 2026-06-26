@@ -319,9 +319,9 @@ or rotate, because the developer has no AWS identity. Two patterns:
 > path skips AWS entirely: the IdP token goes straight to the gateway. Either way,
 > **refresh = re-authenticate against your corporate IdP**, never an AWS IAM user.
 
-> **Optional credential helper:** the repo's optional
-> [`aws-oidc-auth`](../README.md#optional-helper-escape-hatch) implements the
-> browser OIDC (PKCE) → token flow as a reusable helper for orgs that want a
+> **Optional credential helper:** the external
+> [`aws-oidc-auth`](../README.md#optional-helper-escape-hatch) helper implements
+> the browser OIDC (PKCE) → token flow as a reusable helper for orgs that want a
 > packaged refresh loop instead of scripting the `curl` above. It is **not
 > required** for this pattern.
 

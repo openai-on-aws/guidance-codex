@@ -54,8 +54,8 @@ For identity provider setup with IAM Identity Center, see AWS documentation:
 #### Step 1: Clone Repository
 
 ```bash
-git clone https://github.com/aws-samples/sample-openai-on-aws.git
-cd sample-openai-on-aws/guidance-for-codex-on-amazon-bedrock
+git clone https://github.com/openai-on-aws/guidance-codex.git
+cd guidance-codex
 ```
 
 #### Step 2: Deploy the Bedrock Auth Stack
@@ -625,6 +625,6 @@ aws cloudformation wait stack-delete-complete \
 ## Support
 
 - **Documentation:** [../QUICKSTART.md](../QUICKSTART.md)
-- **Issues:** [GitHub Issues](https://github.com/aws-samples/sample-openai-on-aws/issues)
+- **Issues:** [GitHub Issues](https://github.com/openai-on-aws/guidance-codex/issues)
 - **Codex configuration reference:** [OpenAI Codex docs](https://developers.openai.com/codex/config-advanced)
 - **Technical guide:** [deploy-identity-center.md](deploy-identity-center.md)

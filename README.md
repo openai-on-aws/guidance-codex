@@ -95,8 +95,8 @@ custom client binaries:
 
 ### Optional helper (escape hatch)
 
-| Package | When you need it |
-|---------|------------------|
+| Helper / guidance | When you need it |
+|-------------------|------------------|
 | [aws-oidc-auth/](https://github.com/aws-samples/sample-openai-on-aws/tree/main/aws-oidc-auth) | **Optional.** A `credential_process` helper for organizations that federate a raw OIDC IdP (Okta / Entra ID / Auth0 / Cognito) to AWS **without** IAM Identity Center. If you use IdC (`aws sso login`) or a gateway with OIDC bearer auth, you do **not** need this. See [AUTH_HELPER.md](https://github.com/aws-samples/sample-openai-on-aws/blob/main/AUTH_HELPER.md). |
 | [deployment/scripts/codex-sso-creds*](deployment/scripts/) | **Optional, Native AWS Access path.** A `credential_process` helper script (bash + PowerShell) that makes IAM Identity Center login seamless — it auto-triggers `aws sso login` when the token expires, so the daily loop is just `codex`. Supports macOS, Linux, and Windows, including headless device-code hosts. See [credential-helper-auto-login.md](docs/credential-helper-auto-login.md). |
 

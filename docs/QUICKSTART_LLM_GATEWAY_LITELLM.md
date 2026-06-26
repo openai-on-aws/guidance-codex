@@ -34,8 +34,8 @@ Deploy LiteLLM gateway on ECS Fargate for OpenAI Codex with Amazon Bedrock backe
 ### Step 1: Clone and Set Variables
 
 ```bash
-git clone https://github.com/aws-samples/sample-openai-on-aws.git
-cd sample-openai-on-aws/guidance-for-codex-on-amazon-bedrock
+git clone https://github.com/openai-on-aws/guidance-codex.git
+cd guidance-codex
 
 export AWS_REGION=us-east-1
 export BEDROCK_REGION=us-east-1
@@ -507,5 +507,5 @@ For OIDC self-service portal, see [deployment/litellm/jwt-middleware/README.md](
 
 - **LiteLLM Documentation:** [docs.litellm.ai](https://docs.litellm.ai)
 - **Pattern Documentation:** [QUICKSTART_LLM_GATEWAY.md](QUICKSTART_LLM_GATEWAY.md)
-- **Issues:** [GitHub Issues](https://github.com/aws-samples/sample-openai-on-aws/issues)
+- **Issues:** [GitHub Issues](https://github.com/openai-on-aws/guidance-codex/issues)
 - **Codex Configuration:** [OpenAI Codex docs](https://developers.openai.com/codex/config-advanced)

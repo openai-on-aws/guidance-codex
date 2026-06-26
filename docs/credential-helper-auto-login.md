@@ -45,8 +45,8 @@ QUICKSTART "Step 4: Distribute Configuration"):
 for your platform from [`deployment/scripts/`](../deployment/scripts/):
 
 ```bash
-git clone https://github.com/aws-samples/sample-openai-on-aws.git
-cd sample-openai-on-aws/guidance-for-codex-on-amazon-bedrock
+git clone https://github.com/openai-on-aws/guidance-codex.git
+cd guidance-codex
 ```
 
 This helper replaces only the manual `aws sso login` step; the IdC permission set
