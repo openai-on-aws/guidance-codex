@@ -32,7 +32,25 @@ processors:
         from_attribute: model
         action: upsert
       - key: team.id
-        from_attribute: team_id
+        from_attribute: team
+        action: upsert
+      - key: department
+        from_attribute: department
+        action: upsert
+      - key: cost_center
+        from_attribute: cost_center
+        action: upsert
+      - key: organization
+        from_attribute: organization
+        action: upsert
+      - key: location
+        from_attribute: location
+        action: upsert
+      - key: role
+        from_attribute: role
+        action: upsert
+      - key: manager
+        from_attribute: manager
         action: upsert
 
   resource:

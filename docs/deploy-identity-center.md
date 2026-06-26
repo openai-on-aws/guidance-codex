@@ -284,17 +284,38 @@ Useful flags:
 deployment/scripts/build-local-collector.sh --all
 ```
 
-Render `deployment/templates/otel-local-config.yaml` per developer, substituting
-`__AWS_REGION__`, `__USER_EMAIL__`, and `__USER_ID__`. Each developer runs:
+Generate a rendered per-developer config with the bundled helper. Identity
+fields (`user.email`, `user.id`) are derived automatically from the active
+SSO session. Use `--auto-lookup` to populate org attributes directly from the
+IdC identity store (values synced from your IdP via SCIM — no manual entry):
 
 ```bash
-otelcol-local-<platform> --config otel-local-config.yaml
+deployment/scripts/generate-sidecar-config.sh \
+  --region us-west-2 \
+  --profile codex-bedrock \
+  --auto-lookup \
+  --output ~/.codex/otel-local-config.yaml
 ```
 
-Resolve the SSO identity for a logged-in profile with
-`aws sts get-caller-identity --profile codex-bedrock --query Arn` (the SSO username
-follows the final `/` of the assumed-role ARN). Use that value for
-`__USER_EMAIL__` / `__USER_ID__`.
+If SCIM does not sync a particular field, pass it explicitly — explicit flags
+always override the looked-up value:
+
+```bash
+deployment/scripts/generate-sidecar-config.sh \
+  --region us-west-2 --auto-lookup \
+  --team platform          # override team if not in IdC
+  --output ~/.codex/otel-local-config.yaml
+```
+
+`--auto-lookup` requires `sso-admin:ListInstances` and
+`identitystore:DescribeUser` on the calling role. Without it, you can pass org
+attributes manually (`--department`, `--team`, `--cost-center`,
+`--organization`, `--location`, `--role`) or omit them (empty-string labels
+are inserted, which CloudWatch ignores). Each developer runs:
+
+```bash
+otelcol-local-<platform> --config ~/.codex/otel-local-config.yaml
+```
 
 ### 4. Add the OTel block to the developer config
 
@@ -328,6 +349,46 @@ The permission set must allow `cloudwatch:PutMetricData` — that single action 
 all the sidecar needs to publish metrics via the native OTLP endpoint. No
 log-group, ECS, or ALB permissions are required on this path, and there is no
 internet-facing endpoint to harden.
+
+## MDM distribution
+
+For organizations managing developer machines with MDM, the sidecar config can
+be generated at device enrollment or login via a management script — no
+per-developer manual step required.
+
+`generate-sidecar-config.sh --auto-lookup` calls the IdC identity store API,
+fetches the user's org attributes (Department, Organization, CostCenter, Title,
+Locale) synced from your IdP via SCIM, and writes a fully rendered
+`otel-local-config.yaml`. Run it once per device under an admin profile; the
+output file is static until re-generated.
+
+### Required IAM for the MDM role
+
+The role used by the management script needs these read-only permissions, in
+addition to the normal `CodexBedrockUser` permission set:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "sso-admin:ListInstances",
+    "identitystore:ListUsers",
+    "identitystore:DescribeUser"
+  ],
+  "Resource": "*"
+}
+```
+
+Attach this to a separate admin/enrollment role — end users do not need
+identity store read access.
+
+### SCIM attribute availability
+
+`--auto-lookup` populates whichever attributes your IdP syncs to IdC via SCIM.
+For any attribute not synced, pass it as an explicit flag in your management
+script (`--department`, `--team`, `--cost-center`, `--organization`,
+`--location`, `--role`) or add it as a custom IdP attribute mapped to the
+corresponding `aws:identitystore:enterprise` extension field.
 
 ## Known pitfalls
 

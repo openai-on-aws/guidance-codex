@@ -4,7 +4,7 @@
 
 extensions:
   health_check:
-    endpoint: 127.0.0.1:13133
+    endpoint: 127.0.0.1:13134
     path: /
 
   sigv4auth:
@@ -16,7 +16,7 @@ receivers:
   otlp:
     protocols:
       http:
-        endpoint: 127.0.0.1:4318
+        endpoint: 127.0.0.1:4319
         # Accept OTLP from Codex client on localhost only
 
 processors:
@@ -28,6 +28,27 @@ processors:
         action: insert
       - key: user.id
         value: "__USER_ID__"
+        action: insert
+      - key: department
+        value: "__DEPARTMENT__"
+        action: insert
+      - key: team.id
+        value: "__TEAM_ID__"
+        action: insert
+      - key: cost_center
+        value: "__COST_CENTER__"
+        action: insert
+      - key: organization
+        value: "__ORGANIZATION__"
+        action: insert
+      - key: location
+        value: "__LOCATION__"
+        action: insert
+      - key: role
+        value: "__ROLE__"
+        action: insert
+      - key: manager
+        value: "__MANAGER__"
         action: insert
 
   # Mark as client-side metrics
@@ -65,6 +86,8 @@ service:
   extensions: [health_check, sigv4auth]
 
   telemetry:
+    metrics:
+      level: none
     logs:
       level: info
       encoding: console
