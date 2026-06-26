@@ -31,4 +31,8 @@ general_settings:
 litellm_settings:
   set_verbose: false
   drop_params: false   # fail fast if the gateway cannot preserve a Responses API field
-  # callbacks: ["otel"]  # uncomment + set OTEL_ENDPOINT env var if you wire up an OTel collector
+  # Built-in OTEL callback emits user_id/user_email/team_id/model as span attributes.
+  # otel_org_callback.py adds org fields (department, team, cost_center, etc.) from key
+  # metadata as datapoint labels on litellm.request.count.
+  # Requires OTEL_ENDPOINT env var pointing at the OTEL collector.
+  callbacks: ["otel", "./otel_org_callback.py"]

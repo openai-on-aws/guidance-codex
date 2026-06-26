@@ -248,9 +248,12 @@ To also get the Layer 1 client metrics — `codex.turn.token_usage`,
 the **per-developer local sidecar** exactly as on the
 [Native path](#layer-1--live-dashboards--quota-alerts-cloudwatch). This is
 independent of the gateway: Codex emits client OTEL the same way regardless of how
-it reaches Bedrock. (Codex cannot SigV4-sign, so the sidecar signs — it needs the
-developer's AWS credentials; a developer holding only an OIDC bearer has no
-credentials for the sidecar to sign with.)
+it reaches Bedrock. The same `generate-sidecar-config.sh` script and full org
+attribute set (`department`, `team.id`, `cost_center`, `organization`, `location`,
+`role`, `manager`) apply here identically — see `deploy-identity-center.md §5`.
+
+> **Note.** The sidecar signs with SigV4, so the developer needs AWS credentials
+> (`aws sso login`). A developer holding only an OIDC bearer cannot run the sidecar.
 
 ---
 

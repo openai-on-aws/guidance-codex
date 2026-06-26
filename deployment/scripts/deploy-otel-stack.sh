@@ -46,7 +46,9 @@ Example:
 After deploy completes, build and distribute the sidecar collector:
   ./build-local-collector.sh --all
 Then give each developer the rendered otel-local-config.yaml (substitute
-__AWS_REGION__, __USER_EMAIL__, __USER_ID__) and this Codex config.toml block.
+__AWS_REGION__, __USER_EMAIL__, __USER_ID__, and optional org fields
+__DEPARTMENT__, __TEAM_ID__, __COST_CENTER__, __ORGANIZATION__, __LOCATION__,
+__ROLE__) and this Codex config.toml block.
 Codex selects metric, log, and trace exporters separately; the dashboard needs
 the metrics exporter pointed at the local sidecar:
 
@@ -156,7 +158,9 @@ Next steps — set up the per-developer sidecar:
        ./build-local-collector.sh --all
 
   2. Render deployment/templates/otel-local-config.yaml for each developer,
-     substituting __AWS_REGION__ (=$region), __USER_EMAIL__, __USER_ID__.
+     substituting __AWS_REGION__ (=$region), __USER_EMAIL__, __USER_ID__,
+     and optional org fields __DEPARTMENT__, __TEAM_ID__, __COST_CENTER__,
+     __ORGANIZATION__, __LOCATION__, __ROLE__ (leave empty if not available).
 
   3. Add this block to each developer's ~/.codex/config.toml:
 
