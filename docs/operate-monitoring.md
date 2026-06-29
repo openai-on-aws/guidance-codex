@@ -98,6 +98,47 @@ Codex automatically stamps resource attributes: `service.name` (e.g.
 `app.version`, `model`, `originator`, `session_source`, `os`. These become
 additional CloudWatch dimensions.
 
+#### User & organizational attribution
+
+The **local sidecar** adds identity and organizational attributes that Codex
+itself does not emit, as **resource** attributes baked in at render time (this
+collector has no token to read claims from — see `deploy-identity-center.md`).
+`user.email` / `user.id` are required; the organizational fields are optional:
+
+| Attribute | Required | Source (local path) |
+|---|---|---|
+| `user.email` | yes | rendered `__USER_EMAIL__` |
+| `user.id` | yes | rendered `__USER_ID__` |
+| `user.name` | no | rendered `__USER_NAME__` |
+| `department` | no | rendered `__DEPARTMENT__` |
+| `team.id` | no | rendered `__TEAM_ID__` |
+| `cost_center` | no | rendered `__COST_CENTER__` |
+| `organization` | no | rendered `__ORGANIZATION__` |
+| `location` | no | rendered `__LOCATION__` |
+| `role` | no | rendered `__ROLE__` |
+| `manager` | no | rendered `__MANAGER__` |
+
+They are emitted as resource attributes (a `transform` processor also copies
+each onto the datapoint), so you group by the `@resource.` form — e.g.
+`sum by ("@resource.department")(...)`. Drop any attribute you cannot populate —
+never ship a literal `__PLACEHOLDER__`.
+
+> **Same dashboard, no collector.** Because these are resource attributes, the
+> identical dashboard works on the
+> [bearer-token path](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/coding-agents-codex-bearer-token.html)
+> (Codex → CloudWatch directly, no sidecar), where the same keys are set via the
+> `OTEL_RESOURCE_ATTRIBUTES` environment variable. `model` and `token_type` are
+> metric-level dimensions Codex stamps itself on both paths.
+
+> **Gateway path is more limited.** On the LiteLLM gateway, metric attribution
+> comes from LiteLLM's fixed OTEL metric attribute allowlist, so only
+> `user.email`, `user.id`, `team.id`, `organization`, and `model` are available
+> as metric dimensions. `department`, `cost_center`, `location`, `role`,
+> `manager`, and `user.name` ride only on spans/logs and are **not** metric
+> dimensions on this path — attribute gateway metrics by team/org and join the
+> richer org fields downstream (CUR / Athena). Full per-attribute metric parity
+> is a local-sidecar capability.
+
 ### Spend
 
 The live dashboard shows **token volume** (per user, per type, per model), not a
@@ -248,9 +289,13 @@ To also get the Layer 1 client metrics — `codex.turn.token_usage`,
 the **per-developer local sidecar** exactly as on the
 [Native path](#layer-1--live-dashboards--quota-alerts-cloudwatch). This is
 independent of the gateway: Codex emits client OTEL the same way regardless of how
-it reaches Bedrock. (Codex cannot SigV4-sign, so the sidecar signs — it needs the
-developer's AWS credentials; a developer holding only an OIDC bearer has no
-credentials for the sidecar to sign with.)
+it reaches Bedrock. The same `generate-sidecar-config.sh` script and full org
+attribute set (`department`, `team.id`, `cost_center`, `organization`, `location`,
+`role`, `manager`) apply here identically — see
+[deploy-identity-center.md](deploy-identity-center.md).
+
+> **Note.** The sidecar signs with SigV4, so the developer needs AWS credentials
+> (`aws sso login`). A developer holding only an OIDC bearer cannot run the sidecar.
 
 ---
 

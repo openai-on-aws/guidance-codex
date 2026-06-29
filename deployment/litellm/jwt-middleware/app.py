@@ -166,6 +166,13 @@ def validate_jwt_token(token: str) -> Dict:
             'email': payload.get('email', payload.get('preferred_username')),
             'groups': payload.get('groups', []),
             'name': payload.get('name', ''),
+            'department': payload.get('custom:department', payload.get('department', payload.get('dept', ''))),
+            'team': payload.get('custom:team', payload.get('team', payload.get('team_id', ''))),
+            'cost_center': payload.get('custom:cost_center', payload.get('cost_center', payload.get('costCenter', ''))),
+            'organization': payload.get('custom:organization', payload.get('organization', '')),
+            'location': payload.get('custom:location', payload.get('location', payload.get('office_location', ''))),
+            'role': payload.get('custom:role', payload.get('role', payload.get('job_title', ''))),
+            'manager': payload.get('custom:manager', payload.get('manager', payload.get('manager_email', ''))),
         }
 
         if not user_info['user_id']:
@@ -238,6 +245,13 @@ def cache_api_key(user_id: str, api_key: str, user_info: Dict):
                 'email': user_info.get('email'),
                 'name': user_info.get('name'),
                 'groups': user_info.get('groups', []),
+                'department': user_info.get('department', ''),
+                'team': user_info.get('team', ''),
+                'cost_center': user_info.get('cost_center', ''),
+                'organization': user_info.get('organization', ''),
+                'location': user_info.get('location', ''),
+                'role': user_info.get('role', ''),
+                'manager': user_info.get('manager', ''),
                 'created_at': int(time.time()),
                 'ttl': int(time.time()) + (90 * 86400),  # 90 days TTL
             }
@@ -274,6 +288,13 @@ def create_litellm_api_key(user_info: Dict) -> str:
                 'email': user_info['email'],
                 'name': user_info['name'],
                 'groups': user_info['groups'],
+                'department': user_info.get('department', ''),
+                'team': user_info.get('team', ''),
+                'cost_center': user_info.get('cost_center', ''),
+                'organization': user_info.get('organization', ''),
+                'location': user_info.get('location', ''),
+                'role': user_info.get('role', ''),
+                'manager': user_info.get('manager', ''),
                 'managed_by': 'jwt-middleware',
                 'created_via': 'oidc-sso',
             }

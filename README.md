@@ -68,13 +68,25 @@ custom client binaries:
   point it at a collector (see [operate-monitoring.md](docs/operate-monitoring.md)).
   Per-user identity is added by the **local collector** — baked into the sidecar
   config as `user.id` / `user.email` resource attributes — so **no
-  header-enrichment binary is required.** (Codex can set `otel.span_attributes`,
-  but those apply to traces, not metrics; for per-user metric attribution either
-  bake it in the collector as above, or have Codex forward static `[otel.*].headers`
-  and lift them via `from_context`.) Note: **metrics** export (not logs/traces) is
-  gated behind `analytics.enabled`, which `codex exec` and the TUI default to
-  `true` — so metrics flow by default; they are dropped only if a config sets
-  `[analytics] enabled = false`.
+  header-enrichment binary is required.** The sidecar can additionally bake in
+  **organizational** attributes (`user.name`, `department`, `team.id`,
+  `cost_center`, `organization`, `location`, `role`, `manager`) for grouping
+  spend/usage by team, department, or cost center. These are emitted as **resource**
+  attributes — the shape the dashboards expect (`@resource.team.id`, …) and the same
+  keys the no-collector
+  [bearer-token path](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/coding-agents-codex-bearer-token.html)
+  sets via `OTEL_RESOURCE_ATTRIBUTES`, so **one dashboard works for both paths.**
+  (Codex can set `otel.span_attributes`, but those apply to traces, not metrics; for
+  per-user metric attribution either bake it in the collector as above, or have Codex
+  forward static `[otel.*].headers` and lift them via `from_context`.) Note:
+  **metrics** export (not logs/traces) is gated behind `analytics.enabled`, which
+  `codex exec` and the TUI default to `true` — so metrics flow by default; they are
+  dropped only if a config sets `[analytics] enabled = false`.
+  - **Gateway path caveat:** on the LiteLLM gateway, metric attribution is limited to
+    the identity fields LiteLLM emits on metric datapoints (`user.email`, `user.id`,
+    `team.id`, `organization`, `model`). The remaining org fields ride only on
+    spans/logs, so attribute gateway metrics by team/org and join the rest downstream
+    (CUR / Athena). Full per-attribute metric parity is a local-sidecar capability.
 
 > **SigV4 caveat:** Codex cannot sign requests to CloudWatch's native OTLP endpoint
 > (which requires SigV4). Any path that ships Codex's own client OTEL to CloudWatch

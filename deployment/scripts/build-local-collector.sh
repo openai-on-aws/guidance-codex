@@ -40,7 +40,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$BUILD_ALL" == "true" ]]; then
-  PLATFORMS=("darwin-arm64" "darwin-amd64" "linux-amd64")
+  PLATFORMS=("darwin-arm64" "darwin-amd64" "linux-amd64" "windows-amd64")
 fi
 
 mkdir -p "$BINARIES_DIR"
@@ -64,6 +64,10 @@ download_binary() {
     linux-amd64)
       url="$BASE_URL/v${OTEL_VERSION}/otelcol-contrib_${OTEL_VERSION}_linux_amd64.tar.gz"
       ;;
+    windows-amd64)
+      url="$BASE_URL/v${OTEL_VERSION}/otelcol-contrib_${OTEL_VERSION}_windows_amd64.tar.gz"
+      output_name="otelcol-local-windows-amd64.exe"
+      ;;
     *)
       echo "Unsupported platform: $platform" >&2
       return 1
@@ -75,7 +79,10 @@ download_binary() {
   local tmpdir=$(mktemp -d)
   if curl -fSL "$url" -o "$tmpdir/otelcol.tar.gz"; then
     tar -xzf "$tmpdir/otelcol.tar.gz" -C "$tmpdir"
-    mv "$tmpdir/otelcol-contrib" "$BINARIES_DIR/$output_name"
+    # Windows tar extracts as otelcol-contrib.exe
+    local binary
+    binary=$(find "$tmpdir" -name "otelcol-contrib*" -not -name "*.tar.gz" | head -1)
+    mv "$binary" "$BINARIES_DIR/$output_name"
     chmod +x "$BINARIES_DIR/$output_name"
     rm -rf "$tmpdir"
 

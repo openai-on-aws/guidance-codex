@@ -29,7 +29,7 @@ Resources:
               "properties":{
                 "title":"Total Tokens","region":"${MetricsRegion}","view":"number",
                 "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
-                  "query":"sum(histogram_sum(sum_over_time({\"codex.turn.token_usage\", \"@instrumentation.@name\"=\"codex\"}[1d])))"}]},
+                  "query":"sum(histogram_sum(sum_over_time({\"codex.turn.token_usage\", token_type!=\"total\", \"@instrumentation.@name\"=\"codex\"}[1d])))"}]},
                 "plotOptions":{"legend":{"position":"bottom","show":false},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
                   "style":{"lineOptions":{"filled":false,"stacked":false,"width":2,"pattern":"solid","spline":false},
                     "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
@@ -40,7 +40,7 @@ Resources:
               "properties":{
                 "title":"Active Users","region":"${MetricsRegion}","view":"number",
                 "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
-                  "query":"count(group by (\"user.id\")(count_over_time({\"codex.turn.token_usage\", \"@instrumentation.@name\"=\"codex\"}[1d])))"}]},
+                  "query":"count(group by (\"@resource.user.id\")(count_over_time({\"codex.turn.token_usage\", \"@instrumentation.@name\"=\"codex\"}[1d])))"}]},
                 "plotOptions":{"legend":{"position":"bottom","show":false},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
                   "style":{"lineOptions":{"filled":false,"stacked":false,"width":2,"pattern":"solid","spline":false},
                     "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
@@ -74,7 +74,7 @@ Resources:
               "properties":{
                 "title":"Tokens by type","region":"${MetricsRegion}","view":"line",
                 "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
-                  "query":"sum by (token_type)(histogram_sum({\"codex.turn.token_usage\", \"@instrumentation.@name\"=\"codex\"}))"}]},
+                  "query":"sum by (token_type)(histogram_sum({\"codex.turn.token_usage\", token_type!=\"total\", \"@instrumentation.@name\"=\"codex\"}))"}]},
                 "plotOptions":{"legend":{"position":"bottom","show":true},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
                   "style":{"lineOptions":{"filled":true,"stacked":true,"width":2,"pattern":"solid","spline":false},
                     "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
@@ -85,7 +85,7 @@ Resources:
               "properties":{
                 "title":"Tokens by model","region":"${MetricsRegion}","view":"line",
                 "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
-                  "query":"topk(10, sum by (model)(histogram_sum({\"codex.turn.token_usage\", \"@instrumentation.@name\"=\"codex\"})))"}]},
+                  "query":"topk(10, sum by (model)(histogram_sum({\"codex.turn.token_usage\", token_type!=\"total\", \"@instrumentation.@name\"=\"codex\"})))"}]},
                 "plotOptions":{"legend":{"position":"bottom","show":true},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
                   "style":{"lineOptions":{"filled":true,"stacked":true,"width":2,"pattern":"solid","spline":false},
                     "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
@@ -98,7 +98,7 @@ Resources:
               "properties":{
                 "title":"Top users by tokens","region":"${MetricsRegion}","view":"line",
                 "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
-                  "query":"topk(25, sum by (\"user.id\")(histogram_sum({\"codex.turn.token_usage\", \"@instrumentation.@name\"=\"codex\"})))"}]},
+                  "query":"topk(25, sum by (\"@resource.user.id\")(histogram_sum({\"codex.turn.token_usage\", token_type!=\"total\", \"@instrumentation.@name\"=\"codex\"})))"}]},
                 "plotOptions":{"legend":{"position":"bottom","show":true},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
                   "style":{"lineOptions":{"filled":false,"stacked":false,"width":2,"pattern":"solid","spline":false},
                     "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
@@ -109,20 +109,20 @@ Resources:
               "properties":{
                 "title":"Top users by API requests","region":"${MetricsRegion}","view":"line",
                 "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
-                  "query":"topk(25, sum by (\"user.id\")({\"codex.api_request\", \"@instrumentation.@name\"=\"codex\"}))"}]},
+                  "query":"topk(25, sum by (\"@resource.user.id\")({\"codex.api_request\", \"@instrumentation.@name\"=\"codex\"}))"}]},
                 "plotOptions":{"legend":{"position":"bottom","show":true},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
                   "style":{"lineOptions":{"filled":false,"stacked":false,"width":2,"pattern":"solid","spline":false},
                     "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
               }
             },
 
-            {"type":"text","x":0,"y":18,"width":24,"height":1,"properties":{"markdown":"# Activity"}},
+            {"type":"text","x":0,"y":18,"width":24,"height":1,"properties":{"markdown":"# Organizational Attribution"}},
             {
               "type":"chart","x":0,"y":19,"width":12,"height":6,
               "properties":{
-                "title":"Top users by tool calls","region":"${MetricsRegion}","view":"line",
+                "title":"Tokens by department","region":"${MetricsRegion}","view":"line",
                 "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
-                  "query":"topk(25, sum by (\"user.id\")(histogram_count({\"codex.turn.tool.call\", \"@instrumentation.@name\"=\"codex\"})))"}]},
+                  "query":"topk(25, sum by (\"@resource.department\")(histogram_sum({\"codex.turn.token_usage\", token_type!=\"total\", \"@instrumentation.@name\"=\"codex\"})))"}]},
                 "plotOptions":{"legend":{"position":"bottom","show":true},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
                   "style":{"lineOptions":{"filled":false,"stacked":false,"width":2,"pattern":"solid","spline":false},
                     "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
@@ -130,6 +130,52 @@ Resources:
             },
             {
               "type":"chart","x":12,"y":19,"width":12,"height":6,
+              "properties":{
+                "title":"Tokens by team","region":"${MetricsRegion}","view":"line",
+                "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
+                  "query":"topk(25, sum by (\"@resource.team.id\")(histogram_sum({\"codex.turn.token_usage\", token_type!=\"total\", \"@instrumentation.@name\"=\"codex\"})))"}]},
+                "plotOptions":{"legend":{"position":"bottom","show":true},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
+                  "style":{"lineOptions":{"filled":false,"stacked":false,"width":2,"pattern":"solid","spline":false},
+                    "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
+              }
+            },
+            {
+              "type":"chart","x":0,"y":25,"width":12,"height":6,
+              "properties":{
+                "title":"Tokens by cost center","region":"${MetricsRegion}","view":"line",
+                "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
+                  "query":"topk(25, sum by (\"@resource.cost_center\")(histogram_sum({\"codex.turn.token_usage\", token_type!=\"total\", \"@instrumentation.@name\"=\"codex\"})))"}]},
+                "plotOptions":{"legend":{"position":"bottom","show":true},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
+                  "style":{"lineOptions":{"filled":false,"stacked":false,"width":2,"pattern":"solid","spline":false},
+                    "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
+              }
+            },
+            {
+              "type":"chart","x":12,"y":25,"width":12,"height":6,
+              "properties":{
+                "title":"Tokens by organization","region":"${MetricsRegion}","view":"line",
+                "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
+                  "query":"topk(25, sum by (\"@resource.organization\")(histogram_sum({\"codex.turn.token_usage\", token_type!=\"total\", \"@instrumentation.@name\"=\"codex\"})))"}]},
+                "plotOptions":{"legend":{"position":"bottom","show":true},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
+                  "style":{"lineOptions":{"filled":false,"stacked":false,"width":2,"pattern":"solid","spline":false},
+                    "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
+              }
+            },
+
+            {"type":"text","x":0,"y":31,"width":24,"height":1,"properties":{"markdown":"# Activity"}},
+            {
+              "type":"chart","x":0,"y":32,"width":12,"height":6,
+              "properties":{
+                "title":"Top users by tool calls","region":"${MetricsRegion}","view":"line",
+                "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,
+                  "query":"topk(25, sum by (\"@resource.user.id\")(histogram_count({\"codex.turn.tool.call\", \"@instrumentation.@name\"=\"codex\"})))"}]},
+                "plotOptions":{"legend":{"position":"bottom","show":true},"xAxis":{"type":"datetime"},"yAxis":[{"type":"linear"}],
+                  "style":{"lineOptions":{"filled":false,"stacked":false,"width":2,"pattern":"solid","spline":false},
+                    "numberOptions":{"sparkline":true},"pieOptions":{"innerSize":"50%"},"barOptions":{},"gaugeOptions":{}}}
+              }
+            },
+            {
+              "type":"chart","x":12,"y":32,"width":12,"height":6,
               "properties":{
                 "title":"Threads by session source","region":"${MetricsRegion}","view":"pie",
                 "data":{"queries":[{"id":"a","type":"cloudwatch-metrics","language":"PromQL","step":60,

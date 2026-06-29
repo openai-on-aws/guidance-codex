@@ -443,11 +443,52 @@ deployment/scripts/build-local-collector.sh --all
 
 ### Step 3: Render the sidecar config per developer
 
-Substitute the placeholders in `deployment/templates/otel-local-config.yaml`:
+Use the generator script — it derives identity from the active SSO session and
+can pull org attributes straight from IAM Identity Center:
 
-- `__AWS_REGION__` → your region (must match the dashboard's `MetricsRegion`)
-- `__USER_EMAIL__` / `__USER_ID__` → the developer's identity (baked at install
-  time; becomes the per-user attribution dimension)
+```bash
+# Identity only (auto-derived from the SSO session)
+deployment/scripts/generate-sidecar-config.sh --region us-west-2 --profile codex-bedrock
+
+# Recommended: auto-populate org attributes from the IdC identity store
+deployment/scripts/generate-sidecar-config.sh --region us-west-2 --profile codex-bedrock --auto-lookup
+
+# Or supply org attributes explicitly (override / no IdC lookup)
+deployment/scripts/generate-sidecar-config.sh --region us-west-2 \
+  --department Engineering --team platform --cost-center CC-9001
+```
+
+`--auto-lookup` reads `Department`, `Organization`, `CostCenter`, `Title`
+(→ `role`), `Locale` (→ `location`), `Manager`, and display name from the IdC
+identity store (enterprise SCIM extension), so you don't hand-enter them. It
+needs `sso-admin:ListInstances` + `identitystore:DescribeUser` on the calling
+role — ideal for an admin role driving an MDM / fleet rollout. Explicit flags
+win over looked-up values, and any field with no value is **omitted** from the
+rendered config (no empty dimension). Run `--help` for all flags.
+
+The script substitutes these placeholders in
+`deployment/templates/otel-local-config.yaml`:
+
+- `__AWS_REGION__` → region (must match the dashboard's `MetricsRegion`)
+- `__USER_EMAIL__` / `__USER_ID__` → identity (derived from the SSO session)
+- **Org attributes (optional):** `__USER_NAME__`, `__DEPARTMENT__`,
+  `__TEAM_ID__`, `__COST_CENTER__`, `__ORGANIZATION__`, `__LOCATION__`,
+  `__ROLE__`, `__MANAGER__`. Each becomes a CloudWatch dimension you can group
+  by. **Editing the template by hand instead?** Delete the entire 3-line
+  `- key: / value: / action:` block for any field you cannot supply, rather
+  than shipping a literal `__PLACEHOLDER__` (it would become a junk dimension);
+  the generator does this automatically.
+
+> **Dual emission (resource + datapoint).** The collector sets these as
+> *resource* attributes and a `transform` processor copies each onto the
+> *datapoint* too, so every metric carries both forms. CloudWatch PromQL then
+> matches whether a query uses the `@resource.` prefix
+> (e.g. `sum by ("@resource.team.id")(...)`) or the bare label
+> (`sum by ("team.id")(...)`). The bundled `CodexOnBedrock` dashboard uses the
+> `@resource.` form so the *same* dashboard also works for the bearer-token
+> setup in the [AWS coding-agents observability
+> guidance](https://aws-observability.github.io/observability-best-practices/ai/coding-agents-observability/codex/),
+> where Codex sends identity via `OTEL_RESOURCE_ATTRIBUTES` as resource-only.
 
 Each developer runs the collector with their rendered config:
 

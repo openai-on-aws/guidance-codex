@@ -1,0 +1,8 @@
+# Test-only dependencies for the jwt-middleware unit tests.
+#
+# PyJWT[crypto] and cryptography are already pinned in ../requirements.txt (the
+# middleware uses them at runtime); install that file too when running tests:
+#   pip install -r ../requirements.txt -r requirements.txt
+#
+# PyYAML is needed only by test_otel_configs.py to parse the collector configs.
+PyYAML==6.0.2

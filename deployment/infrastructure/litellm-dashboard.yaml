@@ -123,9 +123,95 @@ Resources:
               }
             },
             {
-              "type": "metric",
+              "type": "text",
               "x": 0,
               "y": 14,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "## Attribution\n\nOrg/team breakdowns use the dimensions LiteLLM natively emits on metrics (organization, team.id). department/cost_center/etc. are span-only on this path — attribute by team/org here, join the rest downstream (CUR / Athena)."
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 15,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Token Usage by organization",
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": true,
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SEARCH('{${MetricsNamespace},OTelLib,organization} MetricName=\"gen_ai.client.token.usage\"', 'Sum', 300)", "id": "e1" } ]
+                ],
+                "yAxis": { "left": { "label": "Tokens" } }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 15,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Token Usage by team",
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": true,
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SEARCH('{${MetricsNamespace},OTelLib,team.id} MetricName=\"gen_ai.client.token.usage\"', 'Sum', 300)", "id": "e1" } ]
+                ],
+                "yAxis": { "left": { "label": "Tokens" } }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 21,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Request Cost by organization",
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": true,
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SEARCH('{${MetricsNamespace},OTelLib,organization} MetricName=\"gen_ai.client.token.cost\"', 'Sum', 300)", "id": "e1" } ]
+                ],
+                "yAxis": { "left": { "label": "USD" } }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 21,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Token Usage by model",
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": true,
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SEARCH('{${MetricsNamespace},OTelLib,model} MetricName=\"gen_ai.client.token.usage\"', 'Sum', 300)", "id": "e1" } ]
+                ],
+                "yAxis": { "left": { "label": "Tokens" } }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 27,
               "width": 24,
               "height": 6,
               "properties": {
