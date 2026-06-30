@@ -218,6 +218,41 @@ The middleware expects these claims in the JWT token:
 - **`email`** (optional) - User email
 - **`groups`** (optional) - Array of group/team names
 
+#### Organizational claims (optional)
+
+If your IdP supplies them, the middleware also extracts `department`, `team`,
+`cost_center`, `organization`, `location`, `role`, and `manager` and attaches
+them to the LiteLLM API key metadata. Each is read with a `custom:` → flat →
+alias fallback (e.g. `custom:department` → `department` → `dept`) so Cognito,
+Okta, and Entra naming all work.
+
+These claims ride on the gateway's **spans/logs** for downstream attribution
+(CUR / Athena); they are not promoted to OTEL metric dimensions on the gateway
+path — see the note in
+[`deployment/litellm/otel-collector-config.yaml`](../otel-collector-config.yaml).
+For full per-attribute **metric** attribution, use the local sidecar path
+(`deployment/templates/otel-local-config.yaml`), which emits the same fields as
+OTEL resource attributes.
+
+## Tests
+
+Unit tests live in [`tests/`](tests/) and run with the standard-library
+`unittest` runner (no pytest required):
+
+```bash
+# from this directory (deployment/litellm/jwt-middleware)
+pip install -r requirements.txt -r tests/requirements.txt
+python3 -m unittest discover -s tests -v
+```
+
+- `test_jwt_org_claims.py` — JWT org-claim extraction (custom:/flat/alias
+  fallback, precedence, empty-claim handling). Needs `PyJWT[crypto]` +
+  `cryptography` (already in `requirements.txt`).
+- `test_otel_configs.py` — asserts both collector configs carry the expected
+  identity/org attributes (sidecar as resource attributes + datapoint transform;
+  gateway lifting the namespaced LiteLLM metric keys). Needs `PyYAML` (in
+  `tests/requirements.txt`).
+
 ## Cost
 
 **Additional AWS costs compared to standard LiteLLM deployment:**

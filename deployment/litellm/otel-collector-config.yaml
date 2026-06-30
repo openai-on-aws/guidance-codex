@@ -19,21 +19,36 @@ processors:
   batch/logs:
     timeout: 10s
 
-  # LiteLLM forwards user identity as span attributes — lift them to resource attributes
+  # LiteLLM stamps identity onto OTEL metric datapoints from a fixed allowlist
+  # (litellm/integrations/opentelemetry.py: METRIC_METADATA_KEYS), namespaced
+  # under "metadata.user_api_key_*"; the model rides on "gen_ai.request.model".
+  # These are NOT the flat names (user_email/user_id/team_id/model) — using the
+  # flat names makes from_attribute a silent no-op, dropping all attribution.
+  # Lift the real datapoint keys to friendly attribute names.
   attributes:
     actions:
       - key: user.email
-        from_attribute: user_email
+        from_attribute: metadata.user_api_key_user_email
         action: upsert
       - key: user.id
-        from_attribute: user_id
+        from_attribute: metadata.user_api_key_user_id
         action: upsert
       - key: model
-        from_attribute: model
+        from_attribute: gen_ai.request.model
         action: upsert
       - key: team.id
-        from_attribute: team_id
+        from_attribute: metadata.user_api_key_team_id
         action: upsert
+      - key: organization
+        from_attribute: metadata.user_api_key_org_id
+        action: upsert
+      # NOTE: department, cost_center, location, role, manager and user.name are
+      # NOT available on LiteLLM metric datapoints — they are not in the OTEL
+      # metric allowlist and only ride on spans/logs (as a serialized
+      # metadata.requester_metadata blob). On this gateway path, attribute by
+      # team.id / organization here and join the richer org fields downstream
+      # (CUR 2.0 / Athena / QuickSight). For full per-attribute parity use the
+      # local sidecar path (deployment/templates/otel-local-config.yaml).
 
   resource:
     attributes:
@@ -60,6 +75,27 @@ exporters:
     output_destination: cloudwatch
     resource_to_telemetry_conversion:
       enabled: true
+    # Declare exactly which attributes become CloudWatch dimensions. Each entry
+    # is a SINGLE dimension (never crossed with another) to keep cardinality —
+    # and cost — bounded: crossing e.g. [user.email, organization] would bill
+    # one custom metric per (user x org) pair. Any attribute not present on a
+    # datapoint is silently skipped, so org-only traffic still emits cleanly.
+    # COST NOTE: user.email / user.id scale with active users (one custom metric
+    # per user per metric name). Trim those two entries if per-user CloudWatch
+    # metrics are not needed — per-user attribution is also available via CUR.
+    metric_declarations:
+      - dimensions: [[OTelLib]]
+        metric_name_selectors: [".*"]
+      - dimensions: [[organization, OTelLib]]
+        metric_name_selectors: [".*"]
+      - dimensions: [[team.id, OTelLib]]
+        metric_name_selectors: [".*"]
+      - dimensions: [[model, OTelLib]]
+        metric_name_selectors: [".*"]
+      - dimensions: [[user.email, OTelLib]]
+        metric_name_selectors: [".*"]
+      - dimensions: [[user.id, OTelLib]]
+        metric_name_selectors: [".*"]
 
 service:
   extensions: [health_check]

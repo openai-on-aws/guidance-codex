@@ -20,25 +20,86 @@ receivers:
         # Accept OTLP from Codex client on localhost only
 
 processors:
-  # Add user attribution
-  attributes:
-    actions:
-      - key: user.email
-        value: "__USER_EMAIL__"
-        action: insert
-      - key: user.id
-        value: "__USER_ID__"
-        action: insert
-
-  # Mark as client-side metrics
+  # User + organizational attribution, baked in at render time (this collector
+  # has no token to read claims from — see deploy-otel-stack.sh and
+  # docs/deploy-identity-center.md). These are set as RESOURCE attributes; the
+  # transform processor below also copies them onto each datapoint, so the same
+  # metric carries BOTH forms (see that processor for why).
+  #
+  # user.email / user.id are required; the organizational fields are OPTIONAL —
+  # DELETE the whole "- key: … / value: …" block for any value you cannot supply
+  # rather than shipping a literal "__PLACEHOLDER__" (it would become a junk
+  # dimension). Deleting it here also drops it from datapoints automatically:
+  # the transform copy is guarded on the resource attribute existing.
   resource:
     attributes:
+      # Mark as client-side metrics. (service.name is not set here — Codex stamps
+      # it itself, e.g. codex / codex_exec, so the dashboard's
+      # "@instrumentation.@name"="codex" / "@resource.service.name"=~"codex.*"
+      # filters match without this collector overriding the client's value.)
       - key: source
         value: "client"
         action: insert
       - key: collector.type
         value: "local"
         action: insert
+      # Identity (required).
+      - key: user.email
+        value: "__USER_EMAIL__"
+        action: insert
+      - key: user.id
+        value: "__USER_ID__"
+        action: insert
+      # Organizational (optional — delete the block if unknown).
+      - key: user.name
+        value: "__USER_NAME__"
+        action: insert
+      - key: department
+        value: "__DEPARTMENT__"
+        action: insert
+      - key: team.id
+        value: "__TEAM_ID__"
+        action: insert
+      - key: cost_center
+        value: "__COST_CENTER__"
+        action: insert
+      - key: organization
+        value: "__ORGANIZATION__"
+        action: insert
+      - key: location
+        value: "__LOCATION__"
+        action: insert
+      - key: role
+        value: "__ROLE__"
+        action: insert
+      - key: manager
+        value: "__MANAGER__"
+        action: insert
+
+  # Copy the identity/org RESOURCE attributes onto each datapoint, so the metric
+  # carries both forms. CloudWatch PromQL then matches them whether a query uses
+  # the "@resource." prefix (resource attribute) or the bare label (datapoint
+  # attribute). This makes a single "@resource."-prefixed dashboard work against
+  # BOTH this solution and the bearer-token guidance path
+  # (https://aws-observability.github.io/observability-best-practices/ai/coding-agents-observability/codex/),
+  # where identity arrives via OTEL_RESOURCE_ATTRIBUTES as resource-only. It also
+  # mirrors how Codex clients historically duplicated resource attrs onto data.
+  # Each copy is guarded on the resource attribute existing, so deleting an
+  # optional attribute above automatically drops it here too (no edit needed).
+  transform/identity_to_datapoint:
+    metric_statements:
+      - context: datapoint
+        statements:
+          - set(attributes["user.email"], resource.attributes["user.email"]) where resource.attributes["user.email"] != nil
+          - set(attributes["user.id"], resource.attributes["user.id"]) where resource.attributes["user.id"] != nil
+          - set(attributes["user.name"], resource.attributes["user.name"]) where resource.attributes["user.name"] != nil
+          - set(attributes["department"], resource.attributes["department"]) where resource.attributes["department"] != nil
+          - set(attributes["team.id"], resource.attributes["team.id"]) where resource.attributes["team.id"] != nil
+          - set(attributes["cost_center"], resource.attributes["cost_center"]) where resource.attributes["cost_center"] != nil
+          - set(attributes["organization"], resource.attributes["organization"]) where resource.attributes["organization"] != nil
+          - set(attributes["location"], resource.attributes["location"]) where resource.attributes["location"] != nil
+          - set(attributes["role"], resource.attributes["role"]) where resource.attributes["role"] != nil
+          - set(attributes["manager"], resource.attributes["manager"]) where resource.attributes["manager"] != nil
 
   # Batch for efficiency
   batch:
@@ -65,6 +126,10 @@ service:
   extensions: [health_check, sigv4auth]
 
   telemetry:
+    # Silence the collector's own internal metrics (it has nowhere to scrape
+    # them and they would otherwise log a startup warning on some builds).
+    metrics:
+      level: none
     logs:
       level: info
       encoding: console
@@ -74,7 +139,10 @@ service:
   pipelines:
     metrics:
       receivers: [otlp]
-      processors: [attributes, resource, batch]
+      # resource sets the identity/org attributes; transform then copies them
+      # onto datapoints so metrics carry both forms (queryable with or without
+      # the "@resource." prefix). Order matters: resource must run first.
+      processors: [resource, transform/identity_to_datapoint, batch]
       exporters: [otlp_http]
 
     # Drop logs and traces for now (Codex primarily sends metrics)

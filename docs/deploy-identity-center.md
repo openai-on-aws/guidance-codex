@@ -284,17 +284,46 @@ Useful flags:
 deployment/scripts/build-local-collector.sh --all
 ```
 
-Render `deployment/templates/otel-local-config.yaml` per developer, substituting
-`__AWS_REGION__`, `__USER_EMAIL__`, and `__USER_ID__`. Each developer runs:
+Render `deployment/templates/otel-local-config.yaml` per developer with the
+generator, then run the sidecar against the output:
 
 ```bash
-otelcol-local-<platform> --config otel-local-config.yaml
+# Derives identity from the SSO session; --auto-lookup pulls org attributes
+# from the IdC identity store (needs sso-admin:ListInstances +
+# identitystore:DescribeUser on the calling role).
+deployment/scripts/generate-sidecar-config.sh --region us-west-2 --profile codex-bedrock --auto-lookup
+
+otelcol-local-<platform> --config otel-local-config-<user>.yaml
 ```
 
-Resolve the SSO identity for a logged-in profile with
-`aws sts get-caller-identity --profile codex-bedrock --query Arn` (the SSO username
-follows the final `/` of the assumed-role ARN). Use that value for
-`__USER_EMAIL__` / `__USER_ID__`.
+The script resolves the SSO identity itself (via
+`aws sts get-caller-identity`, taking the username after the final `/` of the
+assumed-role ARN) for `__USER_EMAIL__` / `__USER_ID__`. To set those manually
+instead, pass `--user-email` / `--user-id`.
+
+The template also carries optional **organizational** placeholders —
+`__USER_NAME__`, `__DEPARTMENT__`, `__TEAM_ID__`, `__COST_CENTER__`,
+`__ORGANIZATION__`, `__LOCATION__`, `__ROLE__`, `__MANAGER__` — so CloudWatch
+can group spend and usage by team, department, cost center, and so on.
+`--auto-lookup` fills these from the IdC identity store (enterprise SCIM
+extension: Department, Organization, CostCenter, Title, Locale, Manager); pass
+explicit flags (`--department`, `--team`, …) to override. Any field with no
+value is **omitted** from the rendered config (no empty dimension). If you edit
+the template by hand instead, delete the whole `- key: / value: / action:`
+block for an attribute you cannot supply rather than leaving a literal
+`__PLACEHOLDER__`, which would publish a junk dimension value.
+
+> **Why these are resource attributes.** The collector sets identity/org as OTEL
+> **resource** attributes (a `transform` processor also copies each onto the
+> datapoint, so a metric carries both forms). Resource attributes are the shape
+> the Coding Agent Insights dashboards expect — you group by `@resource.team.id`,
+> `@resource.department`, and so on. This is also the **only** place organizational
+> dimensions can be set on the no-collector
+> [bearer-token path](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/coding-agents-codex-bearer-token.html),
+> where Codex sends metrics straight to CloudWatch and identity comes from the
+> `OTEL_RESOURCE_ATTRIBUTES` environment variable. Using the same resource-attribute
+> keys here means **one dashboard works for both paths**. (Codex stamps the
+> metric-level dimensions `model` and `token_type` itself.)
 
 ### 4. Add the OTel block to the developer config
 
@@ -328,6 +357,50 @@ The permission set must allow `cloudwatch:PutMetricData` — that single action 
 all the sidecar needs to publish metrics via the native OTLP endpoint. No
 log-group, ECS, or ALB permissions are required on this path, and there is no
 internet-facing endpoint to harden.
+
+## MDM distribution
+
+For organizations managing developer machines with MDM, the sidecar config can
+be generated at device enrollment or login via a management script — no
+per-developer manual step required.
+
+`generate-sidecar-config.sh --auto-lookup` (or `generate-sidecar-config.ps1
+-AutoLookup` on Windows) calls the IdC identity store API, fetches the user's
+org attributes (Department, Organization, CostCenter, Title, Locale, Manager)
+synced from your IdP via SCIM, and writes a fully rendered
+`otel-local-config.yaml` with those values baked in as resource attributes. Run
+it once per device under an admin profile; the output file is static until
+re-generated.
+
+### Required IAM for the MDM role
+
+The role used by the management script needs these read-only permissions, in
+addition to the normal `CodexBedrockUser` permission set:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "sso-admin:ListInstances",
+    "identitystore:ListUsers",
+    "identitystore:DescribeUser"
+  ],
+  "Resource": "*"
+}
+```
+
+Attach this to a separate admin/enrollment role — end users do not need
+identity store read access.
+
+### SCIM attribute availability
+
+`--auto-lookup` populates whichever attributes your IdP syncs to IdC via SCIM.
+For any attribute not synced, pass it as an explicit flag in your management
+script (`--department`, `--team`, `--cost-center`, `--organization`,
+`--location`, `--role`) or add it as a custom IdP attribute mapped to the
+corresponding `aws:identitystore:enterprise` extension field. Any field left
+without a value is dropped from the rendered config, so unsynced attributes
+never become empty CloudWatch dimensions.
 
 ## Known pitfalls
 

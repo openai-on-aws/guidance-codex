@@ -3,3 +3,11 @@ deployment/binaries/
 
 # Local gateway credentials (master key + DB password) — never commit
 deployment/litellm/.env.gateway
+
+# Rendered per-developer sidecar configs (contain identity/org attributes)
+# produced by generate-sidecar-config.sh — never commit
+deployment/templates/otel-local-config-*.yaml
+
+# Python test artifacts (jwt-middleware unit tests)
+__pycache__/
+*.pyc

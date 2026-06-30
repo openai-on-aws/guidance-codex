@@ -155,8 +155,15 @@ Next steps — set up the per-developer sidecar:
   1. Build the collector binaries:
        ./build-local-collector.sh --all
 
-  2. Render deployment/templates/otel-local-config.yaml for each developer,
-     substituting __AWS_REGION__ (=$region), __USER_EMAIL__, __USER_ID__.
+  2. Render a per-developer otel-local-config.yaml with the generator:
+       ./generate-sidecar-config.sh --region $region --profile codex-bedrock --auto-lookup
+     It derives __USER_EMAIL__/__USER_ID__ from the SSO session and, with
+     --auto-lookup, pulls org attributes (department, cost_center, location,
+     role, manager, organization) from the IAM Identity Center identity store.
+     Pass explicit flags (--department, --team, ...) to override, or omit a
+     field to drop it (no empty dimension). Run --help for all options.
+     Manual editing of the template works too — delete the 3-line block for any
+     attribute you cannot supply rather than shipping a literal "__PLACEHOLDER__".
 
   3. Add this block to each developer's ~/.codex/config.toml:
 

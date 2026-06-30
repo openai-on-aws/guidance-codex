@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Organizational attributes on OTEL metrics**, for grouping CloudWatch
+  spend/usage by team, department, cost center, and so on:
+  - Local sidecar (`deployment/templates/otel-local-config.yaml`) gains optional
+    `user.name`, `department`, `team.id`, `cost_center`, `organization`,
+    `location`, `role`, `manager` as **resource** attributes (a `transform`
+    processor also copies each onto the datapoint). Emitting them as resource
+    attributes matches what the dashboards query (`@resource.*`) and the
+    no-collector bearer-token path, where the same keys are set via
+    `OTEL_RESOURCE_ATTRIBUTES` — so one dashboard serves both. The
+    `CodexOnBedrock` dashboard adds an Organizational Attribution section.
+  - `generate-sidecar-config.sh` / `generate-sidecar-config.ps1` render a
+    per-developer config: identity derived from the SSO session, org attributes
+    optionally pulled from the IAM Identity Center identity store
+    (`--auto-lookup`); any field left empty is dropped (no junk dimension).
+  - Windows support: `build-local-collector.sh` builds the `windows-amd64`
+    sidecar binary; a PowerShell generator mirrors the bash one.
+  - LiteLLM gateway (`deployment/litellm/otel-collector-config.yaml`) maps
+    `organization` and adds explicit `awsemf` `metric_declarations` to bound
+    dimension cardinality; the LiteLLM dashboard gains org/team/model widgets.
+    The JWT middleware forwards org claims (custom:/flat/alias fallback) to
+    LiteLLM key metadata for span/downstream attribution. Note: LiteLLM's metric
+    attribute allowlist limits gateway metric dimensions to
+    user/team/org/model; the remaining org fields are span-only.
+  - Unit tests (`deployment/litellm/jwt-middleware/tests/`) cover JWT org-claim
+    extraction and attribute coverage in both collector configs.
+
+### Fixed
+
+- **LiteLLM gateway metric attribution was silently dropped.** The collector
+  lifted `user_email` / `user_id` / `team_id` / `model`, but LiteLLM emits these
+  on metric datapoints as `metadata.user_api_key_*` / `gen_ai.request.model`.
+  `from_attribute` is a no-op on absent keys, so user/team/model attribution
+  produced nothing. Corrected the mappings.
+
 ## [2.0.0] - 2026-05-23
 
 ### BREAKING CHANGES
