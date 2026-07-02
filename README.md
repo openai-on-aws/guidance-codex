@@ -50,50 +50,59 @@ All patterns include:
 - [Troubleshooting](docs/operate-troubleshooting.md)
 - [CHANGELOG](CHANGELOG.md)
 
-## Client tooling — prefer Codex-native, no binaries
+## Client tooling — Codex-native by design
 
-This guidance favors **Codex-native** authentication and telemetry over shipping
-custom client binaries:
+Authentication and telemetry both use features built into Codex.
 
-- **Authentication** — Codex's built-in `amazon-bedrock` provider signs AWS SigV4
-  using the standard AWS credential chain; developers authenticate with
-  `aws sso login` (IAM Identity Center). The gateway patterns use a `CUSTOM_JWT`
-  authorizer, so Codex sends a plain OIDC bearer token issued by your IdP. Codex can
-  refresh that token automatically — point the provider at a token-fetch `auth`
-  command (model-provider path) or use `[mcp_servers.*.oauth]` (MCP path); a static
-  `env_key` token is the manual alternative. See
-  [daily use](docs/QUICKSTART_AGENTCORE_GATEWAY.md#daily-use).
-  **No credential-helper binary is required for these default paths.**
-- **Telemetry** — Codex emits OpenTelemetry natively via its `[otel]` config; you
-  point it at a collector (see [operate-monitoring.md](docs/operate-monitoring.md)).
-  Per-user identity is added by the **local collector** — baked into the sidecar
-  config as `user.id` / `user.email` resource attributes — so **no
-  header-enrichment binary is required.** The sidecar can additionally bake in
-  **organizational** attributes (`user.name`, `department`, `team.id`,
-  `cost_center`, `organization`, `location`, `role`, `manager`) for grouping
-  spend/usage by team, department, or cost center. These are emitted as **resource**
-  attributes — the shape the dashboards expect (`@resource.team.id`, …) and the same
-  keys the no-collector
-  [bearer-token path](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/coding-agents-codex-bearer-token.html)
-  sets via `OTEL_RESOURCE_ATTRIBUTES`, so **one dashboard works for both paths.**
-  (Codex can set `otel.span_attributes`, but those apply to traces, not metrics; for
-  per-user metric attribution either bake it in the collector as above, or have Codex
-  forward static `[otel.*].headers` and lift them via `from_context`.) Note:
-  **metrics** export (not logs/traces) is gated behind `analytics.enabled`, which
-  `codex exec` and the TUI default to `true` — so metrics flow by default; they are
-  dropped only if a config sets `[analytics] enabled = false`.
-  - **Gateway path caveat:** on the LiteLLM gateway, metric attribution is limited to
-    the identity fields LiteLLM emits on metric datapoints (`user.email`, `user.id`,
-    `team.id`, `organization`, `model`). The remaining org fields ride only on
-    spans/logs, so attribute gateway metrics by team/org and join the rest downstream
-    (CUR / Athena). Full per-attribute metric parity is a local-sidecar capability.
+### Authentication
 
-> **SigV4 caveat:** Codex cannot sign requests to CloudWatch's native OTLP endpoint
-> (which requires SigV4). Any path that ships Codex's own client OTEL to CloudWatch
-> therefore runs a standard
-> [AWS Distro for OpenTelemetry (ADOT) Collector](https://aws-otel.github.io/) that
-> signs and forwards. That is upstream AWS software you run, not a binary shipped by
-> this repo.
+- **Native AWS Access.** Codex's `amazon-bedrock` provider signs requests with AWS
+  SigV4 from the standard credential chain. Developers sign in with `aws sso login`
+  (IAM Identity Center).
+- **Gateway patterns.** The gateway uses a `CUSTOM_JWT` authorizer, so Codex sends an
+  OIDC bearer token from your IdP. Codex refreshes the token automatically when you
+  point the provider at a token-fetch `auth` command (model-provider path) or use
+  `[mcp_servers.*.oauth]` (MCP path); a static `env_key` token works too if you'd
+  rather renew it yourself.
+
+See [daily use](docs/QUICKSTART_AGENTCORE_GATEWAY.md#daily-use) for the day-to-day flow.
+
+### Telemetry
+
+Codex emits OpenTelemetry natively through its `[otel]` config; you point it at a
+local collector — the sidecar — that adds the attribution the dashboards run on
+(see [operate-monitoring.md](docs/operate-monitoring.md)):
+
+- **Per-user identity** — the sidecar adds `user.id` and `user.email`.
+- **Organizational grouping** — it can also add `user.name`, `department`,
+  `team.id`, `cost_center`, `organization`, `location`, `role`, and `manager`, so you
+  can slice spend and usage by team, department, or cost center.
+
+These are **resource** attributes — the shape the dashboards expect
+(`@resource.team.id`, …) and the same keys the collector-free
+[bearer-token path](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/coding-agents-codex-bearer-token.html)
+sets via `OTEL_RESOURCE_ATTRIBUTES`. One dashboard works for both the sidecar and the
+bearer-token path.
+
+Metric attribution comes from the sidecar, because Codex's `otel.span_attributes`
+apply only to traces, not metrics. (You can instead have Codex forward static headers
+via `[otel.*].headers` and have the collector lift them into attributes with
+`from_context`, but the sidecar is simpler.)
+
+Metric export is gated behind `analytics.enabled`, which `codex exec` and the TUI
+default to `true`, so metrics flow out of the box.
+
+**Gateway path caveat:** On the LiteLLM gateway, metric attribution covers the
+identity fields LiteLLM puts on metric datapoints: `user.email`, `user.id`,
+`team.id`, `organization`, and `model`. The other org fields travel on spans and
+logs, so attribute gateway metrics by team or org and join the rest downstream
+(CUR / Athena). Full per-attribute metric parity is a local-sidecar capability.
+
+> **SigV4 caveat:** CloudWatch's native OTLP endpoint requires SigV4-signed requests,
+> which Codex does not sign directly. Any path that ships Codex's client OTEL to
+> CloudWatch runs a standard
+> [AWS Distro for OpenTelemetry (ADOT) Collector](https://aws-otel.github.io/) — the
+> upstream AWS collector — to sign and forward.
 >
 > **Two telemetry sources:**
 > - **Server-side metrics.** With AgentCore Gateway, AWS records usage telemetry
@@ -105,12 +114,12 @@ custom client binaries:
 >   AgentCore included. See [operate-monitoring.md](docs/operate-monitoring.md) for
 >   how to wire client OTEL.
 
-### Optional helper (escape hatch)
+### Optional helpers
 
-| Helper / guidance | When you need it |
-|-------------------|------------------|
-| [aws-oidc-auth/](https://github.com/aws-samples/sample-openai-on-aws/tree/main/aws-oidc-auth) | **Optional.** A `credential_process` helper for organizations that federate a raw OIDC IdP (Okta / Entra ID / Auth0 / Cognito) to AWS **without** IAM Identity Center. If you use IdC (`aws sso login`) or a gateway with OIDC bearer auth, you do **not** need this. See [AUTH_HELPER.md](https://github.com/aws-samples/sample-openai-on-aws/blob/main/AUTH_HELPER.md). |
-| [deployment/scripts/codex-sso-creds*](deployment/scripts/) | **Optional, Native AWS Access path.** A `credential_process` helper script (bash + PowerShell) that makes IAM Identity Center login seamless — it auto-triggers `aws sso login` when the token expires, so the daily loop is just `codex`. Supports macOS, Linux, and Windows, including headless device-code hosts. See [credential-helper-auto-login.md](docs/credential-helper-auto-login.md). |
+| Helper / guidance | When it helps |
+|-------------------|---------------|
+| [aws-oidc-auth/](https://github.com/aws-samples/sample-openai-on-aws/tree/main/aws-oidc-auth) | A `credential_process` helper for organizations that federate a raw OIDC IdP (Okta / Entra ID / Auth0 / Cognito) to AWS without IAM Identity Center. If you use IdC (`aws sso login`) or a gateway with OIDC bearer auth, the default paths already cover you. See [AUTH_HELPER.md](https://github.com/aws-samples/sample-openai-on-aws/blob/main/AUTH_HELPER.md). |
+| [deployment/scripts/codex-sso-creds*](deployment/scripts/) | For the Native AWS Access path: a `credential_process` helper script (bash + PowerShell) that makes IAM Identity Center login seamless — it auto-triggers `aws sso login` when the token expires, so the daily loop is just `codex`. Supports macOS, Linux, and Windows, including headless device-code hosts. See [credential-helper-auto-login.md](docs/credential-helper-auto-login.md). |
 
 ## Contributing
 
