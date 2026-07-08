@@ -130,7 +130,7 @@ profile = "codex-bedrock"
 
 > Keep `[model_providers.amazon-bedrock.aws]` to `region` and `profile` — those
 > are the keys the built-in `amazon-bedrock` provider reads, and limiting the
-> block to them keeps Codex startup clean (verified on Codex 0.142.2).
+> block to them keeps Codex startup clean.
 
 Keep provider settings in user-level `~/.codex/config.toml`; Codex ignores
 `model_provider` and `model_providers` in project-local `.codex/config.toml`

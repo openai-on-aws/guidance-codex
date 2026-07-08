@@ -20,11 +20,10 @@ already the default for Codex custom providers.
 
 - **Mantle (OpenAI-compatible API):** `bedrock-mantle.<region>.api.aws/openai/v1` — serves GPT-5.4, GPT-5.5, and GPT-OSS models. The LiteLLM Gateway uses LiteLLM's `bedrock_mantle/<model>` provider and keeps Codex traffic on the OpenAI-compatible Responses path.
 
-> **Note:** The LiteLLM gateway sample in this repo now resolves the Mantle
-> endpoint from the gateway's selected Bedrock region. The tested walkthrough
-> uses `us-east-1`, but the same image can target a different region as long as
-> the gateway mints the bearer token and calls the Mantle endpoint in that same
-> region.
+> **Note:** The LiteLLM gateway sample in this repo resolves the Mantle
+> endpoint from the gateway's selected Bedrock region. The same image can target
+> any region that serves your model, as long as the gateway mints the bearer
+> token and calls the Mantle endpoint in that same region.
 
 Under the hood, Mantle authenticates with a Bearer token
 (`Authorization: Bearer <key>`). The LiteLLM gateway sample in this repo now

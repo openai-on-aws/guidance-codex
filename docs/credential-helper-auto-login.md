@@ -128,8 +128,8 @@ credential_process = sh -c 'exec "$HOME/.local/bin/codex-sso-creds" codex-bedroc
 ```
 
 The Codex `~/.codex/config.toml` points at the **Codex-facing** profile. Set
-`aws.region` to a region that serves your model — `openai.gpt-5.4` on the Codex
-Bedrock (Mantle) path is verified in `us-east-1`:
+`aws.region` to a region that serves your model (see
+[reference-regions.md](reference-regions.md) for how to check):
 
 ```toml
 model_provider = "amazon-bedrock"
@@ -288,9 +288,9 @@ the smoothest first run: Codex then starts straight from the cached token.
   fresh — the cached SSO token is keyed by `sso_start_url`, shared across users of
   that portal. Signing in through a private/incognito window keeps the intended
   IdP session distinct.
-- **Match `aws.region` to a region that serves the model.** `openai.gpt-5.4` on
-  the Codex Bedrock (Mantle) path is verified in `us-east-1`; point `aws.region`
-  there (or at another region offering your model) so calls resolve promptly.
+- **Match `aws.region` to a region that serves the model.** Point `aws.region` at a
+  region that offers your model — see [reference-regions.md](reference-regions.md)
+  for how to check availability.
 - **Keep `[model_providers.amazon-bedrock.aws]` to `region` and `profile`.** Those
   are the keys the built-in provider reads; limiting the block to them keeps Codex
-  startup clean (verified on Codex 0.142.2).
+  startup clean.

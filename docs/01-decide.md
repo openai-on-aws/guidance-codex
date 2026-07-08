@@ -29,7 +29,7 @@ priorities on the two axes that matter: *managed-vs-self-run ops* and
 | **Rate Limiting (RPM/TPM)** | ❌ No | ⚠️ RPM throttle only | Optional |
 | **Model Routing/Fallback** | ❌ No | ✅ Multi-provider (Bedrock/OpenAI/Anthropic) | ✅ Yes |
 | **Content Guardrails** | ❌ No | ✅ Bedrock Guardrails + Policy | ❌ No |
-| **AWS-managed web search (MCP tool)** | ❌ No | ✅ Verified ([guide](QUICKSTART_AGENTCORE_GATEWAY.md#optional-aws-managed-web-search-mcp-tool)) | ❌ No |
+| **AWS-managed web search (MCP tool)** | ❌ No | ✅ Yes ([guide](QUICKSTART_AGENTCORE_GATEWAY.md#optional-aws-managed-web-search-mcp-tool)) | ❌ No |
 | **Setup Time** | 5-60 min | ~10 min (2 API calls + IAM role) | 15 min + build/harden |
 | **Infra Cost** | Free (AWS control plane) | Pay-per-use (managed) | ~$100-150/mo |
 
@@ -37,7 +37,7 @@ priorities on the two axes that matter: *managed-vs-self-run ops* and
 > also in us-west-2; the AgentCore web search connector is us-east-1 only. See
 > [reference-regions.md](reference-regions.md).
 
-> **AgentCore Gateway auth (verified end-to-end on this repo's PoC):** create the
+> **AgentCore Gateway auth:** create the
 > gateway with a `CUSTOM_JWT` authorizer pointed at your OIDC discovery URL. Codex
 > then authenticates with a plain OIDC bearer token — the **same** token the other
 > patterns already issue — talking directly to the gateway with no signing proxy

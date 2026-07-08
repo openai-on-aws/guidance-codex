@@ -272,10 +272,9 @@ profile = "codex-bedrock"
 ```
 
 > Keep `[model_providers.amazon-bedrock.aws]` to `region` and `profile` — the two
-> keys the built-in provider reads — so Codex starts cleanly (verified on Codex
-> 0.142.2). Point `aws.region` at a region that serves your model: `openai.gpt-5.4`
-> on the Codex Bedrock (Mantle) path is verified in `us-east-1`, so calls there
-> resolve promptly.
+> keys the built-in provider reads — so Codex starts cleanly. Point `aws.region` at a
+> region that serves your model; see
+> [reference-regions.md](reference-regions.md) for how to check availability.
 
 This guide keeps `openai.gpt-5.4` in the sample because the walkthrough uses
 `us-west-2`. OpenAI recommends the latest GPT-5 family model for Codex, so if
@@ -522,8 +521,8 @@ Codex exports to the local sidecar, which SigV4-signs and forwards to
 > disabled.
 
 > **`codex exec` flush:** metrics flush on clean process exit and on a 60-second
-> periodic interval (verified end-to-end: a clean `codex exec` turn flushes its
-> metrics on exit — Codex `exec` → sidecar → CloudWatch, queried via PromQL).
+> periodic interval — a clean `codex exec` turn flushes its metrics on exit along the
+> Codex `exec` → sidecar → CloudWatch path.
 > Optional: if a run may exit via an error path (which can skip the on-exit
 > flush), set `OTEL_METRIC_EXPORT_INTERVAL=1000` (milliseconds) so a batch also
 > flushes periodically as a safety net.
