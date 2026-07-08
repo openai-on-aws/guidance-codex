@@ -34,7 +34,7 @@ a standard OIDC token from your IdP (Cognito / Okta / Entra ID / Auth0).
 
 > **Who authenticates whom.** On this path **your IdP issues the token; Codex
 > presents it.** You choose how Codex obtains that token, and the choice decides
-> whether refresh is automatic (verified against the Codex source and live):
+> whether refresh is automatic:
 >
 > - **`env_key` (manual).** Codex reads a static token from an env var and forwards
 >   it. It does **not** refresh — on expiry the gateway returns 401 and you re-mint
@@ -42,14 +42,14 @@ a standard OIDC token from your IdP (Cognito / Okta / Entra ID / Auth0).
 > - **`auth` command (auto-refresh, recommended).** Point the provider at a small
 >   token-fetch command; Codex runs it itself, caches the token for
 >   `refresh_interval_ms`, and **re-runs it to refresh** — no manual step, no 401
->   loop. Verified live: with no token in the environment, Codex invoked the command
->   and authenticated. See [Daily use](#daily-use).
+>   loop. With no token in the environment, Codex invokes the command and
+>   authenticates. See [Daily use](#daily-use).
 >
 > (The native `amazon-bedrock` provider is different again — Codex authenticates via
 > the AWS credential chain / SigV4.)
 
-This was verified end-to-end: a real `codex exec` turn reached the gateway with
-only `Authorization: Bearer <jwt>`, streamed a response, and emitted telemetry.
+On this path a `codex exec` turn reaches the gateway with only
+`Authorization: Bearer <jwt>`, streams a response, and emits telemetry.
 
 > An `AWS_IAM` authorizer is also technically possible, but Codex cannot produce
 > the SigV4 signature it requires for a custom provider — it would need a local
@@ -183,8 +183,7 @@ codex exec "What is 17 multiplied by 23?"
 
 ## Daily use
 
-Pick one of two token strategies. **Both are verified end-to-end against a live
-gateway.**
+Pick one of two token strategies.
 
 ### Option A — `auth` command (recommended: Codex auto-refreshes)
 
@@ -212,8 +211,8 @@ piped to extract `access_token`). Then daily use is simply:
 codex exec "..."   # Codex invokes fetch-token.sh on its own and refreshes on interval
 ```
 
-> Verified live: with **no** token in the environment, Codex invoked the command and
-> authenticated to the gateway. `auth` and `env_key` are mutually exclusive — use one.
+> With **no** token in the environment, Codex invokes the command and authenticates
+> to the gateway. `auth` and `env_key` are mutually exclusive — use one.
 > (Note: this `auth`-command auto-refresh is a **model-provider** feature, i.e. the
 > inference path. For the web-search **MCP** path, use `[mcp_servers.<name>.oauth]` +
 > `codex mcp login`, which performs OAuth with automatic refresh-token renewal.)
@@ -284,8 +283,8 @@ curl -s -X POST "https://<tenant>.auth0.com/oauth/token" \
 Each returns JSON with `access_token` (and, for interactive flows, a `refresh_token`).
 Extract **`access_token`** into `AGENTCORE_TOKEN` as shown in Step 3.
 
-> **Use `access_token`, not `id_token`.** Verified against a live gateway: a Cognito
-> `id_token` is rejected with **HTTP 403 `insufficient_scope`** — the gateway's
+> **Use `access_token`, not `id_token`.** A Cognito `id_token` is rejected with
+> **HTTP 403 `insufficient_scope`** — the gateway's
 > `CUSTOM_JWT` authorizer validates the OAuth **access token** (and its scope), not
 > the OIDC identity token. If you see 403 with a valid-looking login, you almost
 > certainly sent the `id_token`.
@@ -362,9 +361,8 @@ pattern offers it. It is a *separate capability* from the inference target above
 it lives on the gateway's `/mcp` endpoint (not `/inference`) and is consumed by
 Codex's MCP client. The two can share one gateway or run on separate gateways.
 
-**Verified end-to-end** (2026-06-19): a real `codex exec` turn called the tool and
-returned a cited result — confirmed by `mcp_tool_call` events in `--json` output,
-with no shell fallback:
+A `codex exec` turn calls the tool and returns a cited result — you can confirm this
+from `mcp_tool_call` events in `--json` output, with no shell fallback:
 
 ```
 mcp_tool_call | web-search-tool___WebSearch
@@ -415,7 +413,7 @@ Fetch the bearer token exactly as in [Step 3](#step-3-get-a-token-and-point-code
 and refresh it the same way (see
 [Obtaining & refreshing your token](#obtaining--refreshing-your-token)). Web search
 **augments whatever model Codex already uses** — it does not require the inference
-gateway provider. The verified config drives it with the native `amazon-bedrock`
+gateway provider. The config below drives it with the native `amazon-bedrock`
 provider:
 
 ```toml
@@ -445,7 +443,7 @@ default_tools_approval_mode = "approve"    # REQUIRED for non-interactive use
 codex exec "Use the agentcore_websearch tool to find <something current>. Cite the URL."
 ```
 
-**Two Codex client settings are mandatory** (verified against Codex source —
+**Two Codex client settings are mandatory** (see Codex source —
 `codex-rs/core/src/mcp_tool_call.rs`, `codex-rs/codex-mcp/src/mcp/mod.rs`); both
 apply to any remote MCP tool:
 
@@ -507,7 +505,7 @@ Also delete your throwaway Cognito pool/domain if you created one.
 
 ---
 
-## Gotchas (from live E2E testing)
+## Gotchas
 
 1. **`bedrock-mantle:ListModels` is required** on the service role — the connector
    discovers its model list at target creation. Without it the target goes
