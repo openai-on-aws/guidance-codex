@@ -101,6 +101,13 @@ aws cloudformation describe-stacks \
 
 The CloudFormation stack provisions IAM resources but cannot create the permission set itself — IAM Identity Center lives outside CloudFormation's scope. Use the CLI steps below (recommended for automation) or the console fallback.
 
+> **Assigning to a linked account?** A customer-managed policy is resolved *by
+> name in each target account* when the permission set is provisioned. The Step 2
+> stack only creates `CodexBedrockInvokePolicy` in the account where you deployed
+> it. If your assignment target (`--target-id`) is a different member account, 
+> deploy the Step 2 stack there too so a policy with the same name exists in that
+> account — otherwise the account assignment fails with an 404 status error (Not supported policy).
+
 **Option A: CLI (scriptable, CI/CD friendly)**
 
 ```bash
