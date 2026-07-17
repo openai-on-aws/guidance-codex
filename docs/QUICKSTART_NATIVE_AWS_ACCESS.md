@@ -422,6 +422,7 @@ CloudWatch native OTLP metric ingestion is off by default. Enable it once per
 account (metrics are accepted but silently not stored until both are on):
 
 ```bash
+# Requires AWS CLI v2.34.36 or later
 aws cloudwatch start-otel-enrichment --region us-west-2
 aws observabilityadmin start-telemetry-enrichment --region us-west-2
 # verify:
