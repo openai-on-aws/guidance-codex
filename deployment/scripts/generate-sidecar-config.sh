@@ -242,10 +242,10 @@ if [[ "$auto_lookup" == "true" ]]; then
           # Parse standard fields and enterprise extension with python3.
           # Enterprise extension carries Department, Organization, CostCenter,
           # Manager, Division — synced from IdP via SCIM.
-          parsed=$(echo "$user_json" | python3 - <<'PYEOF'
-import sys, json
+          parsed=$(USER_JSON="$user_json" python3 - <<'PYEOF'
+import os, json
 
-u = json.load(sys.stdin)
+u = json.loads(os.environ["USER_JSON"])
 
 def first(lst, key):
     return (lst or [{}])[0].get(key, "")
