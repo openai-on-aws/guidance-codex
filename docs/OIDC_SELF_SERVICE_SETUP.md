@@ -90,7 +90,6 @@ aws cloudformation deploy \
 
 ```bash
 export GATEWAY_STACK=codex-litellm-gateway
-export LITELLM_MASTER_KEY="sk-litellm-$(openssl rand -hex 24)"
 
 aws cloudformation deploy \
   --stack-name "$GATEWAY_STACK" \
@@ -99,7 +98,6 @@ aws cloudformation deploy \
   --region "$AWS_REGION" \
   --parameter-overrides \
       NetworkingStackName=codex-networking \
-      LiteLLMMasterKey="$LITELLM_MASTER_KEY" \
       DBUsername=litellm \
       AwsRegion="$BEDROCK_REGION" \
       LiteLLMImage="$LITELLM_IMAGE" \
@@ -113,8 +111,8 @@ aws cloudformation deploy \
       UserKeyMappingStackName=codex-user-key-mapping
 ```
 
-The stack output `GatewayEndpoint` is your gateway base URL; the self-service
-portal is served at `<GatewayEndpoint>/api/my-key`.
+The stack output `GatewayEndpoint` is the Responses API base URL. The
+self-service portal is served at `<GatewayAdminEndpoint>/api/my-key`.
 
 ---
 
@@ -185,20 +183,12 @@ curl https://<gateway-url>/v1/responses \
 
 ---
 
-## After Getting Key: Set Environment Variable
+## After Getting Key: Configure Runtime Resolution
 
-```bash
-# Set for current shell
-export OPENAI_API_KEY=sk-litellm-xxxxxxxxxxxxx  # gitleaks:allow
-
-# Add to shell profile for persistence:
-echo 'export OPENAI_API_KEY=sk-litellm-xxxxxxxxxxxxx  # gitleaks:allow' >> ~/.zshrc  # macOS
-echo 'export OPENAI_API_KEY=sk-litellm-xxxxxxxxxxxxx  # gitleaks:allow' >> ~/.bashrc # Linux
-
-# Restart your shell or source the profile
-source ~/.zshrc  # macOS
-source ~/.bashrc # Linux
-```
+Store the issued key in your organization's approved secret store. Configure
+the user-level Codex provider with a command-backed `auth` resolver so the key
+is supplied at runtime rather than committed or persisted in shell startup
+files. See the [LiteLLM Codex configuration](QUICKSTART_LLM_GATEWAY_LITELLM.md#codex-configuration).
 
 ---
 
@@ -261,9 +251,9 @@ Fix:
 # Check LiteLLM is healthy
 curl http://localhost:4000/health/liveliness
 
-# Verify master key in Secrets Manager
-aws secretsmanager get-secret-value \
-  --secret-id codex-litellm-gateway/litellm-master-key \
+# Verify the secret exists without retrieving its value
+aws secretsmanager describe-secret \
+  --secret-id codex-litellm-gateway/litellm-secrets \
   --region us-west-2
 
 # Check container logs

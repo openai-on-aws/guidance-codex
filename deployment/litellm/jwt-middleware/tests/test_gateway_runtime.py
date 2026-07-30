@@ -71,6 +71,21 @@ class TestInfrastructureContract(unittest.TestCase):
         self.assertIn("AllowedPattern: \".+@sha256:[a-f0-9]{64}\"", self.template)
         self.assertNotIn("main-latest", self.dockerfile)
 
+    def test_gateway_master_key_is_generated_by_default(self):
+        self.assertIn("HasProvidedLiteLLMMasterKey", self.template)
+        self.assertIn("GenerateStringKey: LITELLM_MASTER_KEY", self.template)
+        self.assertIn("LiteLLMSecretArn:", self.template)
+
+    def test_gateway_can_manage_tls_and_dns(self):
+        self.assertIn("ManagedCertificate:", self.template)
+        self.assertIn("GatewayAliasRecord:", self.template)
+        self.assertIn("Route53HostedZoneId:", self.template)
+
+    def test_gateway_has_explicit_ecs_rollout_safeguards(self):
+        self.assertIn("PlatformVersion: LATEST", self.template)
+        self.assertIn("mode: blocking", self.template)
+        self.assertIn("deregistration_delay.timeout_seconds", self.template)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
@@ -15,6 +16,7 @@ def load_script(module_name, filename):
 
 contract = load_script("responses_contract", "validate-responses-contract.py")
 preflight = load_script("litellm_preflight", "preflight-litellm.py")
+provision_key = load_script("provision_litellm_key", "provision-litellm-key.py")
 doc_links = load_script("doc_links", "validate-doc-links.py")
 
 
@@ -54,6 +56,25 @@ class TestResponsesContract(unittest.TestCase):
 
 
 class TestLiteLLMPreflight(unittest.TestCase):
+    def test_find_aws_cli_prefers_a_v2_candidate(self):
+        def fake_run(command):
+            version = "aws-cli/2.33.11" if command[0] == "/usr/local/bin/aws" else "aws-cli/1.44.28"
+            return type(
+                "Result",
+                (),
+                {"returncode": 0, "stdout": version, "stderr": ""},
+            )()
+
+        with (
+            patch.object(preflight.shutil, "which", return_value="/opt/homebrew/bin/aws"),
+            patch.object(preflight.os.path, "isfile", return_value=True),
+            patch.object(preflight.os, "access", return_value=True),
+            patch.object(preflight, "run", side_effect=fake_run),
+        ):
+            path, version = preflight.find_aws_cli({})
+        self.assertEqual(path, "/usr/local/bin/aws")
+        self.assertEqual(version, "aws-cli/2.33.11")
+
     def test_digest_and_ecr_parsing(self):
         digest = "a" * 64
         image = (
@@ -63,6 +84,25 @@ class TestLiteLLMPreflight(unittest.TestCase):
         self.assertTrue(preflight.validate_digest_reference(image))
         self.assertEqual(preflight.parse_ecr_reference(image)["region"], "us-east-1")
 
+    def test_cidr_rejects_public_and_ipv6_networks(self):
+        self.assertTrue(preflight.validate_cidr("203.0.113.4/32"))
+        self.assertFalse(preflight.validate_cidr("0.0.0.0/0"))
+        self.assertFalse(preflight.validate_cidr("2001:db8::/64"))
+
+    def test_hostname_must_be_inside_hosted_zone(self):
+        self.assertTrue(
+            preflight.hostname_in_zone(
+                "codex-litellm.example.com",
+                "example.com.",
+            )
+        )
+        self.assertFalse(
+            preflight.hostname_in_zone(
+                "codex-litellm.example.net",
+                "example.com.",
+            )
+        )
+
     def test_environment_rejects_mutable_images(self):
         environ = {
             "AWS_REGION": "us-east-1",
@@ -71,6 +111,7 @@ class TestLiteLLMPreflight(unittest.TestCase):
                 "arn:aws:acm:us-east-1:123456789012:certificate/example"
             ),
             "ALLOWED_CIDR": "203.0.113.4/32",
+            "GATEWAY_DOMAIN_NAME": "gateway.example.com",
             "LITELLM_BASE_IMAGE": "ghcr.io/berriai/litellm:latest",
             "LITELLM_IMAGE": (
                 "123456789012.dkr.ecr.us-east-1.amazonaws.com/codex-litellm:v1"
@@ -99,6 +140,47 @@ class TestLiteLLMPreflight(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(warnings, [])
 
+    def test_environment_accepts_managed_certificate_values(self):
+        digest = "d" * 64
+        environ = {
+            "AWS_REGION": "us-east-1",
+            "BEDROCK_REGION": "us-east-1",
+            "ALB_CERTIFICATE_ARN": (
+                "arn:aws:acm:us-east-1:123456789012:certificate/example"
+            ),
+            "ALLOWED_CIDR": "203.0.113.4/32",
+            "LITELLM_BASE_IMAGE": f"ghcr.io/berriai/litellm@sha256:{digest}",
+            "LITELLM_IMAGE": (
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com/"
+                f"codex-litellm@sha256:{digest}"
+            ),
+            "GATEWAY_DOMAIN_NAME": "gateway.example.com",
+            "ROUTE53_HOSTED_ZONE_ID": "Z0123456789EXAMPLE",
+        }
+        errors, warnings = preflight.check_environment(environ, "deploy")
+        self.assertEqual(errors, [])
+        self.assertEqual(warnings, [])
+
+    def test_environment_requires_a_tls_provisioning_path(self):
+        digest = "e" * 64
+        environ = {
+            "AWS_REGION": "us-east-1",
+            "BEDROCK_REGION": "us-east-1",
+            "ALLOWED_CIDR": "203.0.113.4/32",
+            "LITELLM_BASE_IMAGE": f"ghcr.io/berriai/litellm@sha256:{digest}",
+            "LITELLM_IMAGE": (
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com/"
+                f"codex-litellm@sha256:{digest}"
+            ),
+            "GATEWAY_DOMAIN_NAME": "gateway.example.com",
+        }
+        errors, _ = preflight.check_environment(environ, "deploy")
+        self.assertIn(
+            "Set ROUTE53_HOSTED_ZONE_ID for a managed certificate or "
+            "ALB_CERTIFICATE_ARN for an existing certificate",
+            errors,
+        )
+
     def test_build_stage_does_not_require_deployment_values(self):
         digest = "c" * 64
         errors, warnings = preflight.check_environment(
@@ -110,6 +192,37 @@ class TestLiteLLMPreflight(unittest.TestCase):
         )
         self.assertEqual(errors, [])
         self.assertEqual(warnings, [])
+
+
+class TestLiteLLMKeyProvisioning(unittest.TestCase):
+    def test_secret_is_passed_to_aws_over_stdin(self):
+        result = type("Result", (), {"returncode": 0, "stdout": "{}", "stderr": ""})()
+        with patch.object(provision_key, "run_aws", return_value=result) as run_aws:
+            provision_key.store_key(
+                aws_cli="/usr/local/bin/aws",
+                region="us-east-1",
+                secret_id="gateway/codex-key",
+                kms_key_id="arn:aws:kms:us-east-1:123456789012:key/example",
+                key="sk-secret-value",
+            )
+        arguments = run_aws.call_args.args[1]
+        self.assertNotIn("sk-secret-value", arguments)
+        self.assertIn("file:///dev/stdin", arguments)
+        self.assertEqual(
+            run_aws.call_args.kwargs["secret_input"],
+            '{"LITELLM_API_KEY": "sk-secret-value"}',
+        )
+
+    def test_existing_secret_skips_key_generation(self):
+        result = type("Result", (), {"returncode": 0, "stdout": "{}", "stderr": ""})()
+        with patch.object(provision_key, "run_aws", return_value=result):
+            self.assertTrue(
+                provision_key.secret_exists(
+                    aws_cli="/usr/local/bin/aws",
+                    region="us-east-1",
+                    secret_id="gateway/codex-key",
+                )
+            )
 
 
 class TestDocumentationLinks(unittest.TestCase):

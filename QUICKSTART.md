@@ -58,7 +58,7 @@ Question 1: Do you need HARD quota enforcement?
 | **IAM Identity Center Required?** | ✅ Yes | ❌ No | ❌ No |
 | **Path to Bedrock** | Codex → Bedrock (native AWS SDK) | Codex → managed gateway → Bedrock | Codex → self-run gateway → Bedrock |
 | **Infra you operate** | None | None (managed/serverless) | ECS + RDS + ALB |
-| **Developer Command** | `aws sso login` | `export AGENTCORE_TOKEN=<oidc-jwt>` | `export OPENAI_API_KEY=...` |
+| **Developer Command** | `aws sso login` | `export AGENTCORE_TOKEN=<oidc-jwt>` | `codex` with runtime secret resolution |
 | **Per-user Bedrock CloudTrail / CUR** | ✅ Native | ❌ Gateway role only | ❌ Gateway role only |
 | **Hard Budget Limits** | ❌ No | ❌ No (not built-in) | ✅ Provided by gateway |
 | **Per-team Quotas** | ❌ No | ❌ No (not built-in) | ✅ Provided by gateway |
@@ -275,7 +275,7 @@ core commands.
 ### Native AWS Access
 
 ```bash
-AWS_REGION=us-west-2
+AWS_REGION=us-east-1
 
 aws cloudformation deploy \
   --stack-name codex-bedrock-idc \
@@ -292,7 +292,7 @@ After the stack succeeds, create the `CodexBedrockUser` permission set in IAM Id
 ### LLM Gateway (LiteLLM reference)
 
 ```bash
-AWS_REGION=us-west-2
+AWS_REGION=us-east-1
 
 aws cloudformation deploy \
   --stack-name codex-networking \
@@ -301,8 +301,8 @@ aws cloudformation deploy \
   --region "$AWS_REGION"
 
 # Build and push the LiteLLM image to ECR first; see the full guide for the
-# docker buildx commands and the LiteLLMImage / LiteLLMMasterKey /
-# DBUsername / AlbCertificateArn values required by
+# docker buildx commands and the LiteLLMImage / DBUsername / DNS values
+# required by
 # litellm-ecs.yaml.
 aws cloudformation deploy \
   --stack-name codex-litellm-gateway \
@@ -313,9 +313,8 @@ aws cloudformation deploy \
       NetworkingStackName=codex-networking \
       AwsRegion="$AWS_REGION" \
       LiteLLMImage="$LITELLM_IMAGE" \
-      AlbCertificateArn="$ALB_CERTIFICATE_ARN" \
       AlbDomainName="$GATEWAY_DOMAIN_NAME" \
-      LiteLLMMasterKey="$LITELLM_MASTER_KEY" \
+      Route53HostedZoneId="$ROUTE53_HOSTED_ZONE_ID" \
       DBUsername=litellm
 ```
 

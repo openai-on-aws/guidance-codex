@@ -121,7 +121,6 @@ Deploy the networking stack first if not already in place
 
 ```bash
 export GATEWAY_STACK=codex-litellm-gateway
-export LITELLM_MASTER_KEY="sk-litellm-$(openssl rand -hex 24)"
 
 aws cloudformation deploy \
   --stack-name "$GATEWAY_STACK" \
@@ -130,7 +129,6 @@ aws cloudformation deploy \
   --region "$AWS_REGION" \
   --parameter-overrides \
       NetworkingStackName=codex-networking \
-      LiteLLMMasterKey="$LITELLM_MASTER_KEY" \
       DBUsername=litellm \
       AwsRegion="$BEDROCK_REGION" \
       LiteLLMImage="$LITELLM_IMAGE" \
@@ -144,8 +142,9 @@ aws cloudformation deploy \
       UserKeyMappingStackName=codex-user-key-mapping
 ```
 
-Stack outputs include `GatewayEndpoint` (the gateway base URL); the
-self-service portal is served at `<GatewayEndpoint>/api/my-key`.
+Stack outputs include `GatewayEndpoint` (the Responses API base URL) and
+`GatewayAdminEndpoint`; the self-service portal is served at
+`<GatewayAdminEndpoint>/api/my-key`.
 
 ## Developer Experience
 
@@ -334,9 +333,9 @@ aws ecs describe-task-definition --task-definition <task-def-arn> \
 # Check LiteLLM is healthy
 curl http://localhost:4000/health/liveliness
 
-# Verify master key
-aws secretsmanager get-secret-value \
-  --secret-id codex-litellm-gateway/litellm-master-key \
+# Verify the secret exists without retrieving its value
+aws secretsmanager describe-secret \
+  --secret-id codex-litellm-gateway/litellm-secrets \
   --region us-west-2
 
 # Check container logs

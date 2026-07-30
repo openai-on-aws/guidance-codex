@@ -24,14 +24,43 @@ backend. This is the repository's primary enterprise implementation of the
 - Amazon Bedrock activated in target region (this walkthrough uses `us-east-1`)
 - AWS CLI v2 installed and authenticated
 - Docker installed and running
-- `jq` for parsing CloudFormation outputs (optional but recommended)
+- `asm-exec` available for runtime Secrets Manager references
 - [Codex CLI](https://developers.openai.com/codex/cli) installed
-- ACM certificate in `us-east-1` for the HTTPS hostname you want the gateway to use
-- For trusted Codex/browser HTTPS, a DNS name you control must resolve to the ALB and match that ACM certificate
+- A public Route 53 hosted zone, or an existing ACM certificate in the deployment Region
+- A DNS name in that zone for the trusted Codex HTTPS endpoint
 
 ---
 
 ## Deployment
+
+### Automated Path
+
+The Make targets wrap the detailed commands below and never push git changes:
+
+```bash
+cp deployment/litellm/.env.deploy.example deployment/litellm/.env.deploy
+# Edit the gitignored file with your profile, DNS, CIDR, and asm-exec path.
+
+make litellm-check
+CONFIRM_AWS_WRITE=1 make litellm-build
+make litellm-plan
+CONFIRM_AWS_WRITE=1 make litellm-deploy
+```
+
+After the stack is healthy:
+
+```bash
+CONFIRM_AWS_WRITE=1 make litellm-provision-key
+make litellm-codex-config
+make litellm-validate
+```
+
+`litellm-plan` creates a non-executed change set. On the first deployment it
+plans networking first; apply networking before planning the dependent gateway
+stack. The one-command `litellm-deploy` deploys both stacks sequentially and
+requires the explicit write confirmation shown above. `litellm-provision-key`
+creates a model-scoped LiteLLM key, writes it to Secrets Manager without
+printing it, and records only the secret ID in the gitignored deployment state.
 
 ### Step 1: Clone and Set Variables
 
@@ -43,15 +72,13 @@ export AWS_REGION=us-east-1
 export BEDROCK_REGION=us-east-1
 export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 export ECR_REGISTRY="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
-export ALB_CERTIFICATE_ARN=arn:aws:acm:us-east-1:123456789012:certificate/replace-me
 export ALLOWED_CIDR="$(curl -Ls https://checkip.amazonaws.com)/32"
-export LITELLM_BASE_IMAGE=ghcr.io/berriai/litellm@sha256:<reviewed-digest>
-
-# Optional but recommended for trusted HTTPS.
-# If you omit this, the stack returns the ALB DNS name and you'll need `curl -k`
-# for low-level smoke tests because the ACM certificate will not match the ALB hostname.
-# Codex itself should use a cert-matching hostname, not the raw ALB DNS name.
+export LITELLM_BASE_IMAGE=ghcr.io/berriai/litellm@sha256:65d84a2282137b4dc73bbe184650a7c807177c533e4223b3bfbc87963fe3fabe
 export GATEWAY_DOMAIN_NAME=gateway.example.com
+export ROUTE53_HOSTED_ZONE_ID=Z0123456789EXAMPLE
+
+# Alternatively, use an existing certificate and omit ROUTE53_HOSTED_ZONE_ID:
+# export ALB_CERTIFICATE_ARN=arn:aws:acm:us-east-1:123456789012:certificate/replace-me
 
 # Read-only checks before building.
 python3 deployment/scripts/preflight-litellm.py --stage build
@@ -155,7 +182,6 @@ aws cloudformation deploy \
 
 ```bash
 export GATEWAY_STACK=codex-litellm-gateway
-export MASTER_KEY=$(openssl rand -hex 32)
 
 # Deploy gateway (references networking stack via imports)
 aws cloudformation deploy \
@@ -166,31 +192,36 @@ aws cloudformation deploy \
   --parameter-overrides \
       NetworkingStackName="$NETWORKING_STACK" \
       EnableOtel="false" \
-      LiteLLMMasterKey="$MASTER_KEY" \
       DBUsername=litellm \
       AwsRegion="$BEDROCK_REGION" \
       LiteLLMImage="$LITELLM_IMAGE" \
-      AlbCertificateArn="$ALB_CERTIFICATE_ARN" \
+      AlbDomainName="$GATEWAY_DOMAIN_NAME" \
+      Route53HostedZoneId="$ROUTE53_HOSTED_ZONE_ID" \
       AllowedCidr="$ALLOWED_CIDR" \
       EnableJwtMiddleware="false"
 
-# For trusted HTTPS, add:
-#     AlbDomainName="$GATEWAY_DOMAIN_NAME"
+# To reuse an existing certificate, replace Route53HostedZoneId with:
+#     AlbCertificateArn="$ALB_CERTIFICATE_ARN"
 #
 # If you deployed Step 4, also add:
 #     OtelStackName="$OTEL_STACK"
 #     EnableOtel="true"
 
-# Save credentials
-echo "LITELLM_MASTER_KEY=$MASTER_KEY" > .env.gateway
-chmod 600 .env.gateway
-
 # Get gateway URL
 export GATEWAY_URL=$(aws cloudformation describe-stacks \
   --stack-name "$GATEWAY_STACK" --region "$AWS_REGION" \
   --query 'Stacks[0].Outputs[?OutputKey==`GatewayEndpoint`].OutputValue' --output text)
+export GATEWAY_ADMIN_URL=$(aws cloudformation describe-stacks \
+  --stack-name "$GATEWAY_STACK" --region "$AWS_REGION" \
+  --query 'Stacks[0].Outputs[?OutputKey==`GatewayAdminEndpoint`].OutputValue' --output text)
 
 echo "Gateway URL: $GATEWAY_URL"
+
+# Create a dynamic reference; the secret value is resolved only inside asm-exec.
+export LITELLM_SECRET_ARN=$(aws cloudformation describe-stacks \
+  --stack-name "$GATEWAY_STACK" --region "$AWS_REGION" \
+  --query 'Stacks[0].Outputs[?OutputKey==`LiteLLMSecretArn`].OutputValue' --output text)
+export MASTER_KEY_REF="{{resolve:secretsmanager:${LITELLM_SECRET_ARN}:SecretString:LITELLM_MASTER_KEY}}"
 ```
 
 The bundled LiteLLM image now uses LiteLLM's documented
@@ -200,10 +231,10 @@ official `aws-bedrock-token-generator` package. That matches OpenAI's Bedrock
 guidance for long-running applications: use a token provider rather than
 manually injecting a static 12-hour bearer token.
 
-If you omit `AlbDomainName`, CloudFormation returns `https://<alb-dns>/v1` as
-`GatewayEndpoint`. That endpoint is useful for low-level smoke tests with
-`curl -k`, but it is not a trusted Codex endpoint because the ACM certificate
-does not match the raw ALB hostname.
+With `Route53HostedZoneId`, CloudFormation creates and DNS-validates the ACM
+certificate and creates the ALB alias record. With `AlbCertificateArn`, the
+certificate is reused; create the matching DNS alias in your existing DNS
+workflow.
 
 ---
 
@@ -214,14 +245,14 @@ does not match the raw ALB hostname.
 #### Option A: Admin-Generated Keys
 
 ```bash
-# Generate key for a user
-curl -X POST "$GATEWAY_URL/key/generate" \
-  -H "Authorization: Bearer $MASTER_KEY" \
+# Generate key for a user without exposing the admin key to the shell.
+asm-exec curl -X POST "$GATEWAY_ADMIN_URL/key/generate" \
+  -H "Authorization: Bearer $MASTER_KEY_REF" \
   -H "Content-Type: application/json" \
   -d '{
     "key_alias": "alice@company.com",
     "user_id": "alice@company.com",
-    "models": ["gpt-5.5", "gpt-5.4", "gpt-oss-120b"],
+    "models": ["gpt-5.5", "gpt-5.4"],
     "max_budget": 50.0,
     "budget_duration": "30d",
     "tpm_limit": 100000,
@@ -241,28 +272,27 @@ Developers add this to the user-level `~/.codex/config.toml`:
 
 ```toml
 model_provider = "litellm-gateway"
-model = "gpt-5.5"         # Preferred latest GPT-5 model when available
+model = "gpt-5.5"         # Walkthrough model; verify account and Region availability
 web_search = "disabled"   # Bedrock Mantle does not accept the hosted web_search tool type
 
 [model_providers.litellm-gateway]
 name = "LiteLLM Gateway"
 base_url = "<gateway-endpoint>"  # Paste the exact GatewayEndpoint value, including scheme and /v1
-env_key = "OPENAI_API_KEY"
 wire_api = "responses"    # Optional but explicit; custom providers default to Responses
+
+[model_providers.litellm-gateway.auth]
+command = "/usr/bin/env"
+args = ["AWS_PROFILE=<developer-profile>", "AWS_REGION=<region>", "PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin", "<absolute-path-to-asm-exec>", "/usr/bin/printf", "%s\n", "<scoped-key-secrets-manager-reference>"]
+refresh_interval_ms = 300000
 ```
 
-> **Note:** Bedrock Mantle serves GPT-5.x through the Responses API, so `wire_api = "responses"` is the right setting here. Codex custom providers already default to Responses; this guide keeps the setting explicit because it makes the Mantle dependency obvious. `web_search = "disabled"` is a Bedrock Mantle compatibility choice, not a general OpenAI recommendation. The bundled LiteLLM image refreshes its upstream Mantle bearer token automatically from the gateway's AWS credential chain. For Codex itself, `base_url` should be a trusted HTTPS hostname whose certificate matches the URL. Keep this provider block in user-level `~/.codex/config.toml`; Codex ignores provider and auth settings in project-local `.codex/config.toml`.
-
-Set API key:
-
-```bash
-# macOS / Linux
-echo 'export OPENAI_API_KEY=sk-litellm-xxxxxxxxxxxxx' >> ~/.zshrc
-source ~/.zshrc
-
-# Windows PowerShell (replace sk-litellm-xxx with actual key from /key/generate)
-[Environment]::SetEnvironmentVariable("OPENAI_API_KEY", "sk-litellm-xxxxxxxxxxxxx", "User")
-```
+`make litellm-codex-config` prints this block with the deployed endpoint,
+resolver path, and scoped-key reference filled in. Bedrock Mantle serves GPT-5.x
+through the Responses API, so `wire_api = "responses"` is the right setting
+here. Keep this provider block in user-level `~/.codex/config.toml`; Codex
+ignores provider and auth settings in project-local `.codex/config.toml`.
+For customer rollout, replace the deployment profile with a developer profile
+that can read only this scoped-key secret and decrypt it with the stack KMS key.
 
 Test:
 
@@ -275,12 +305,7 @@ codex exec "Create a hello world function in Python"
 Before promotion, run the gateway contract probe with a synthetic identity:
 
 ```bash
-export GATEWAY_BASE_URL="$GATEWAY_URL"
-export GATEWAY_API_KEY="$USER_API_KEY"
-export GATEWAY_MODEL=gpt-5.5
-
-python3 deployment/scripts/validate-responses-contract.py \
-  --include-tool-call
+make litellm-validate
 ```
 
 This validates Responses fields, continuation, SSE streaming, and a function
@@ -294,8 +319,8 @@ and restore tests.
 ### Per-User Budgets
 
 ```bash
-curl -X POST "$GATEWAY_URL/key/generate" \
-  -H "Authorization: Bearer $MASTER_KEY" \
+asm-exec curl -X POST "$GATEWAY_ADMIN_URL/key/generate" \
+  -H "Authorization: Bearer $MASTER_KEY_REF" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "bob@company.com",
@@ -307,8 +332,8 @@ curl -X POST "$GATEWAY_URL/key/generate" \
 ### Per-Team Budgets
 
 ```bash
-curl -X POST "$GATEWAY_URL/key/generate" \
-  -H "Authorization: Bearer $MASTER_KEY" \
+asm-exec curl -X POST "$GATEWAY_ADMIN_URL/key/generate" \
+  -H "Authorization: Bearer $MASTER_KEY_REF" \
   -H "Content-Type: application/json" \
   -d '{
     "team_id": "platform-team",
@@ -400,14 +425,8 @@ aws iam list-attached-role-policies --role-name "$TASK_ROLE"
 
 **Fix:**
 ```bash
-# Verify API key is set
-echo $OPENAI_API_KEY
-
-# Test key directly
-curl -X POST "$GATEWAY_URL/v1/responses" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-5.5","input":"test"}'
+# The helper resolves the scoped key at runtime and tests the full contract.
+make litellm-validate
 ```
 
 If `GATEWAY_URL` uses the raw ALB DNS name instead of a cert-matching domain,
@@ -422,11 +441,8 @@ returned normally while `gpt-5.4` timed out in the same region/account.
 
 **Fix:**
 ```bash
-# Prefer gpt-5.5 (the recommended Codex model). Confirm the model works:
-curl -X POST "$GATEWAY_URL/responses" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-5.5","input":"ping"}'
+# Confirm the configured walkthrough model works:
+GATEWAY_MODEL=gpt-5.5 make litellm-validate
 ```
 
 If a specific model times out, verify it is available for your account and
@@ -440,9 +456,9 @@ certificate is issued for a different hostname.
 
 **Fix:**
 ```bash
-# Deploy or update the stack with a DNS name that resolves to the ALB and
-# matches the ACM certificate.
+# Deploy or update with managed DNS and certificate validation.
 AlbDomainName="$GATEWAY_DOMAIN_NAME"
+Route53HostedZoneId="$ROUTE53_HOSTED_ZONE_ID"
 ```
 
 Use the raw ALB DNS name only for low-level `curl -k` smoke tests.
@@ -507,7 +523,7 @@ aws ecr delete-repository --repository-name "$LITELLM_REPO" --region "$AWS_REGIO
 
 # Developers remove config
 # Delete litellm-gateway block from ~/.codex/config.toml
-# unset OPENAI_API_KEY
+# Delete the scoped key secret after revoking the matching LiteLLM virtual key
 ```
 
 ---
@@ -529,7 +545,7 @@ model_list:
       model: bedrock_mantle/openai.gpt-5.5
 ```
 
-> **Note on GPT-5.4 / GPT-5.5:** These models are Responses-only on Bedrock Mantle. The `bedrock_mantle/` prefix keeps LiteLLM on its documented Mantle Responses provider, which preserves the OpenAI Responses payload shape Codex expects. Prefer `gpt-5.5` when you want the latest OpenAI-recommended Codex model; keep `gpt-5.4` when you need broader Bedrock regional coverage. The bundled LiteLLM image refreshes `AWS_BEARER_TOKEN_BEDROCK` automatically from the gateway's AWS credential chain, and LiteLLM derives the Mantle endpoint from the selected region. GPT-5.4 is also available in `us-west-2` — see `reference-regions.md` if you prefer a different region.
+> **Note on GPT-5.4 / GPT-5.5:** These models are Responses-only on Bedrock Mantle. The `bedrock_mantle/` prefix keeps LiteLLM on its documented Mantle Responses provider, which preserves the Responses payload shape Codex expects. Use the newest model that is approved and available in the selected customer account and Region. The bundled LiteLLM image refreshes `AWS_BEARER_TOKEN_BEDROCK` automatically from the gateway's AWS credential chain, and LiteLLM derives the Mantle endpoint from the selected Region. See `reference-regions.md` before choosing a different Region.
 
 Rebuild and redeploy the image (Steps 2 & 6).
 

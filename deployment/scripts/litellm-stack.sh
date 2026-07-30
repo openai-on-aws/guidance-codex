@@ -1,0 +1,418 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ENV_FILE="${LITELLM_ENV_FILE:-$REPO_ROOT/deployment/litellm/.env.deploy}"
+STATE_FILE="${LITELLM_STATE_FILE:-$REPO_ROOT/deployment/litellm/.deploy-state}"
+
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+fi
+if [[ -f "$STATE_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$STATE_FILE"
+  set +a
+fi
+
+AWS_REGION="${AWS_REGION:-us-east-1}"
+BEDROCK_REGION="${BEDROCK_REGION:-$AWS_REGION}"
+NETWORKING_STACK="${NETWORKING_STACK:-codex-networking}"
+GATEWAY_STACK="${GATEWAY_STACK:-codex-litellm-gateway}"
+LITELLM_REPO="${LITELLM_REPO:-codex-litellm}"
+DESIRED_COUNT="${DESIRED_COUNT:-1}"
+MIN_TASK_COUNT="${MIN_TASK_COUNT:-1}"
+MAX_TASK_COUNT="${MAX_TASK_COUNT:-2}"
+ENABLE_WAF="${ENABLE_WAF:-true}"
+ASSIGN_PUBLIC_IP="${ASSIGN_PUBLIC_IP:-ENABLED}"
+
+usage() {
+  cat <<'EOF'
+Usage: litellm-stack.sh <command>
+
+Commands:
+  check         Read-only local, AWS identity, Docker, and template checks.
+  build         Create/reuse ECR, build the image, and push an immutable tag.
+  plan          Create CloudFormation change sets without executing them.
+  deploy        Deploy networking and the LiteLLM gateway.
+  status        Show stack outputs and ECS service state.
+  provision-key Create a scoped LiteLLM key and store it in Secrets Manager.
+  codex-config  Print a Codex provider config using runtime secret resolution.
+  validate      Run the Responses contract without exposing the admin key.
+
+Required configuration:
+  Copy deployment/litellm/.env.deploy.example to .env.deploy and set:
+  AWS_PROFILE, AWS_REGION, LITELLM_BASE_IMAGE, GATEWAY_DOMAIN_NAME,
+  ALLOWED_CIDR, and either ROUTE53_HOSTED_ZONE_ID or ALB_CERTIFICATE_ARN.
+
+Safety:
+  build and deploy require CONFIRM_AWS_WRITE=1.
+  codex-config and validate use asm-exec so secrets do not enter shell output.
+  Nothing in this script pushes git commits or branches.
+EOF
+}
+
+log() { printf '[litellm] %s\n' "$*" >&2; }
+die() { printf '[litellm] ERROR: %s\n' "$*" >&2; exit 1; }
+require() {
+  local name="$1"
+  [[ -n "${!name:-}" ]] || die "$name is required; configure $ENV_FILE"
+}
+
+resolve_aws_cli() {
+  local candidate version
+  for candidate in "${AWS_CLI:-}" "$(command -v aws 2>/dev/null || true)" \
+    /usr/local/bin/aws /opt/homebrew/bin/aws; do
+    [[ -n "$candidate" && -x "$candidate" ]] || continue
+    version="$("$candidate" --version 2>&1 || true)"
+    if [[ "$version" == aws-cli/2.* ]]; then
+      AWS_CLI="$candidate"
+      export AWS_CLI
+      return
+    fi
+  done
+  die "AWS CLI v2 is required. Install it or set AWS_CLI to its path."
+}
+
+aws_cli() {
+  "$AWS_CLI" "$@"
+}
+
+check_identity() {
+  resolve_aws_cli
+  local identity
+  identity="$(aws_cli sts get-caller-identity --region "$AWS_REGION" --output json)" \
+    || die "AWS credentials are unavailable. Refresh AWS_PROFILE=${AWS_PROFILE:-default}."
+  AWS_ACCOUNT_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["Account"])' <<<"$identity")"
+  export AWS_ACCOUNT_ID
+  log "AWS account $AWS_ACCOUNT_ID, profile ${AWS_PROFILE:-default}, region $AWS_REGION"
+}
+
+check_docker() {
+  command -v docker >/dev/null 2>&1 || die "Docker is not installed."
+  python3 - <<'PY' || die "Docker daemon is unavailable or did not respond within 10 seconds."
+import subprocess
+subprocess.run(
+    ["docker", "info"],
+    check=True,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+    timeout=10,
+)
+PY
+  docker buildx version >/dev/null 2>&1 || die "Docker buildx is unavailable."
+}
+
+resolve_asm_exec() {
+  local candidate="${ASM_EXEC:-}"
+  if [[ -z "$candidate" ]]; then
+    candidate="$(command -v asm-exec 2>/dev/null || true)"
+  fi
+  [[ -n "$candidate" && -x "$candidate" ]] || die \
+    "asm-exec is required for runtime secret resolution; set ASM_EXEC to its executable path."
+  ASM_EXEC="$candidate"
+  export ASM_EXEC
+}
+
+confirm_write() {
+  [[ "${CONFIRM_AWS_WRITE:-0}" == "1" ]] || die \
+    "This command writes AWS resources. Re-run with CONFIRM_AWS_WRITE=1."
+}
+
+run_check() {
+  require LITELLM_BASE_IMAGE
+  check_identity
+  check_docker
+  AWS_CLI="$AWS_CLI" python3 "$SCRIPT_DIR/preflight-litellm.py" --stage build
+  python3 "$REPO_ROOT/deployment/scripts/validate-doc-links.py" >/dev/null
+  log "Mantle model access is verified after deployment with the Responses contract."
+  if command -v cfn-lint >/dev/null 2>&1; then
+    cfn-lint \
+      "$REPO_ROOT/deployment/infrastructure/networking.yaml" \
+      "$REPO_ROOT/deployment/litellm/ecs/litellm-ecs.yaml" \
+      --ignore-checks W6001
+  else
+    log "cfn-lint is not on PATH; CI still enforces template linting."
+  fi
+  log "Read-only checks passed."
+}
+
+run_build() {
+  confirm_write
+  require LITELLM_BASE_IMAGE
+  check_identity
+  check_docker
+  AWS_CLI="$AWS_CLI" python3 "$SCRIPT_DIR/preflight-litellm.py" --stage build
+
+  local repository_mutability
+  if repository_mutability="$(aws_cli ecr describe-repositories \
+    --repository-names "$LITELLM_REPO" \
+    --region "$AWS_REGION" \
+    --query 'repositories[0].imageTagMutability' \
+    --output text 2>/dev/null)"; then
+    [[ "$repository_mutability" == "IMMUTABLE" ]] || die \
+      "Existing ECR repository $LITELLM_REPO is $repository_mutability; use an immutable repository."
+  else
+    log "Creating immutable ECR repository $LITELLM_REPO"
+    aws_cli ecr create-repository \
+      --repository-name "$LITELLM_REPO" \
+      --image-tag-mutability IMMUTABLE \
+      --image-scanning-configuration scanOnPush=true \
+      --region "$AWS_REGION" >/dev/null
+  fi
+
+  local registry image_tag tagged_image digest
+  registry="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+  image_tag="${IMAGE_TAG:-$(git -C "$REPO_ROOT" rev-parse --short HEAD)-$(date -u +%Y%m%d%H%M%S)}"
+  tagged_image="$registry/$LITELLM_REPO:$image_tag"
+
+  aws_cli ecr get-login-password --region "$AWS_REGION" |
+    docker login --username AWS --password-stdin "$registry"
+  docker buildx inspect codex-builder >/dev/null 2>&1 ||
+    docker buildx create --name codex-builder >/dev/null
+  docker buildx build \
+    --builder codex-builder \
+    --platform linux/amd64 \
+    --build-arg "LITELLM_BASE_IMAGE=$LITELLM_BASE_IMAGE" \
+    --tag "$tagged_image" \
+    --file "$REPO_ROOT/deployment/litellm/Dockerfile" \
+    --push \
+    "$REPO_ROOT/deployment/litellm"
+
+  digest="$(aws_cli ecr describe-images \
+    --repository-name "$LITELLM_REPO" \
+    --image-ids "imageTag=$image_tag" \
+    --region "$AWS_REGION" \
+    --query 'imageDetails[0].imageDigest' \
+    --output text)"
+  LITELLM_IMAGE="$registry/$LITELLM_REPO@$digest"
+  umask 077
+  printf 'AWS_ACCOUNT_ID=%q\nLITELLM_IMAGE=%q\nIMAGE_TAG=%q\n' \
+    "$AWS_ACCOUNT_ID" "$LITELLM_IMAGE" "$image_tag" >"$STATE_FILE"
+  log "Built $LITELLM_IMAGE"
+}
+
+gateway_parameters() {
+  GATEWAY_PARAMETERS=(
+    "NetworkingStackName=$NETWORKING_STACK"
+    "EnableOtel=false"
+    "DBUsername=litellm"
+    "AwsRegion=$BEDROCK_REGION"
+    "MantleProjectId=${MANTLE_PROJECT_ID:-default}"
+    "LiteLLMImage=$LITELLM_IMAGE"
+    "AllowedCidr=$ALLOWED_CIDR"
+    "AssignPublicIp=$ASSIGN_PUBLIC_IP"
+    "DesiredCount=$DESIRED_COUNT"
+    "MinTaskCount=$MIN_TASK_COUNT"
+    "MaxTaskCount=$MAX_TASK_COUNT"
+    "EnableWaf=$ENABLE_WAF"
+  )
+  GATEWAY_PARAMETERS+=("AlbDomainName=$GATEWAY_DOMAIN_NAME")
+  if [[ -n "${ALB_CERTIFICATE_ARN:-}" ]]; then
+    GATEWAY_PARAMETERS+=("AlbCertificateArn=$ALB_CERTIFICATE_ARN")
+  fi
+  if [[ -n "${ROUTE53_HOSTED_ZONE_ID:-}" ]]; then
+    GATEWAY_PARAMETERS+=("Route53HostedZoneId=$ROUTE53_HOSTED_ZONE_ID")
+  fi
+}
+
+check_deploy_inputs() {
+  require LITELLM_BASE_IMAGE
+  require LITELLM_IMAGE
+  require ALLOWED_CIDR
+  require GATEWAY_DOMAIN_NAME
+  if [[ -z "${ALB_CERTIFICATE_ARN:-}" && -z "${ROUTE53_HOSTED_ZONE_ID:-}" ]]; then
+    die "Set ROUTE53_HOSTED_ZONE_ID for a managed certificate or ALB_CERTIFICATE_ARN for an existing certificate."
+  fi
+  check_identity
+  AWS_CLI="$AWS_CLI" python3 "$SCRIPT_DIR/preflight-litellm.py" \
+    --stage deploy --check-ecr-image
+  gateway_parameters
+}
+
+run_plan() {
+  check_deploy_inputs
+  if ! aws_cli cloudformation describe-stacks \
+    --stack-name "$NETWORKING_STACK" --region "$AWS_REGION" >/dev/null 2>&1; then
+    log "Networking does not exist. Creating a non-executed networking change set."
+    aws_cli cloudformation deploy \
+      --stack-name "$NETWORKING_STACK" \
+      --template-file "$REPO_ROOT/deployment/infrastructure/networking.yaml" \
+      --region "$AWS_REGION" \
+      --no-execute-changeset
+    log "Execute the networking change set before planning the gateway."
+    return
+  fi
+  aws_cli cloudformation deploy \
+    --stack-name "$GATEWAY_STACK" \
+    --template-file "$REPO_ROOT/deployment/litellm/ecs/litellm-ecs.yaml" \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --region "$AWS_REGION" \
+    --parameter-overrides "${GATEWAY_PARAMETERS[@]}" \
+    --no-execute-changeset
+  log "Gateway change set created but not executed."
+}
+
+run_deploy() {
+  confirm_write
+  check_deploy_inputs
+  aws_cli cloudformation deploy \
+    --stack-name "$NETWORKING_STACK" \
+    --template-file "$REPO_ROOT/deployment/infrastructure/networking.yaml" \
+    --region "$AWS_REGION" \
+    --parameter-overrides "VpcCidr=${VPC_CIDR:-10.0.0.0/16}" \
+    --no-fail-on-empty-changeset
+  aws_cli cloudformation deploy \
+    --stack-name "$GATEWAY_STACK" \
+    --template-file "$REPO_ROOT/deployment/litellm/ecs/litellm-ecs.yaml" \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --region "$AWS_REGION" \
+    --parameter-overrides "${GATEWAY_PARAMETERS[@]}" \
+    --no-fail-on-empty-changeset
+  run_status
+}
+
+stack_output() {
+  local key="$1"
+  aws_cli cloudformation describe-stacks \
+    --stack-name "$GATEWAY_STACK" \
+    --region "$AWS_REGION" \
+    --query "Stacks[0].Outputs[?OutputKey=='$key'].OutputValue" \
+    --output text
+}
+
+run_status() {
+  check_identity
+  aws_cli cloudformation describe-stacks \
+    --stack-name "$GATEWAY_STACK" \
+    --region "$AWS_REGION" \
+    --query 'Stacks[0].{Status:StackStatus,Outputs:Outputs}' \
+    --output json
+}
+
+secret_reference() {
+  local secret_id="$1"
+  local json_key="$2"
+  printf '{{resolve:secretsmanager:%s:SecretString:%s}}\n' \
+    "$secret_id" "$json_key"
+}
+
+master_secret_reference() {
+  secret_reference "$(stack_output LiteLLMSecretArn)" LITELLM_MASTER_KEY
+}
+
+run_provision_key() {
+  confirm_write
+  check_identity
+  resolve_asm_exec
+  local admin_endpoint master_ref secret_id kms_key_arn
+  admin_endpoint="$(stack_output GatewayAdminEndpoint)"
+  master_ref="$(master_secret_reference)"
+  secret_id="${CODEX_API_SECRET_ID:-$GATEWAY_STACK/codex-walkthrough-key}"
+  kms_key_arn="$(stack_output LiteLLMKmsKeyArn)"
+
+  "$ASM_EXEC" env "LITELLM_MASTER_KEY=$master_ref" \
+    python3 "$SCRIPT_DIR/provision-litellm-key.py" \
+      --admin-url "$admin_endpoint" \
+      --secret-id "$secret_id" \
+      --kms-key-id "$kms_key_arn" \
+      --aws-cli "$AWS_CLI" \
+      --region "$AWS_REGION" \
+      --key-alias "${CODEX_KEY_ALIAS:-codex-walkthrough}" \
+      --models "${CODEX_KEY_MODELS:-gpt-5.5}"
+
+  umask 077
+  printf 'CODEX_API_SECRET_ID=%q\n' "$secret_id" >>"$STATE_FILE"
+  log "Scoped Codex key is available through Secrets Manager reference $secret_id."
+}
+
+run_codex_config() {
+  check_identity
+  resolve_asm_exec
+  local endpoint secret_ref
+  require CODEX_API_SECRET_ID
+  endpoint="$(stack_output GatewayEndpoint)"
+  secret_ref="$(secret_reference "$CODEX_API_SECRET_ID" LITELLM_API_KEY)"
+  python3 - \
+    "$endpoint" \
+    "$ASM_EXEC" \
+    "$secret_ref" \
+    "${AWS_PROFILE:-default}" \
+    "$AWS_REGION" <<'PY'
+import json
+import sys
+
+endpoint, asm_exec, secret_ref, aws_profile, aws_region = sys.argv[1:]
+print('model = "gpt-5.5"')
+print('model_provider = "litellm-gateway"')
+print('web_search = "disabled"')
+print()
+print("[model_providers.litellm-gateway]")
+print('name = "LiteLLM Gateway"')
+print(f"base_url = {json.dumps(endpoint)}")
+print('wire_api = "responses"')
+print()
+print("[model_providers.litellm-gateway.auth]")
+print('command = "/usr/bin/env"')
+print(
+    "args = ["
+    + ", ".join(
+        json.dumps(value)
+        for value in [
+            f"AWS_PROFILE={aws_profile}",
+            f"AWS_REGION={aws_region}",
+            "PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin",
+            asm_exec,
+            "/usr/bin/printf",
+            "%s\\n",
+            secret_ref,
+        ]
+    )
+    + "]"
+)
+print("refresh_interval_ms = 300000")
+PY
+}
+
+run_validate() {
+  check_identity
+  local endpoint
+  endpoint="${GATEWAY_BASE_URL:-$(stack_output GatewayEndpoint)}"
+  if [[ -n "${GATEWAY_API_KEY:-}" ]]; then
+    GATEWAY_BASE_URL="$endpoint" \
+      GATEWAY_MODEL="${GATEWAY_MODEL:-gpt-5.5}" \
+      python3 "$SCRIPT_DIR/validate-responses-contract.py" --include-tool-call
+    return
+  fi
+
+  resolve_asm_exec
+  local secret_ref
+  if [[ -n "${CODEX_API_SECRET_ID:-}" ]]; then
+    secret_ref="$(secret_reference "$CODEX_API_SECRET_ID" LITELLM_API_KEY)"
+  else
+    log "No scoped key is configured; using the admin key for this contract probe only."
+    secret_ref="$(master_secret_reference)"
+  fi
+  "$ASM_EXEC" env \
+    "GATEWAY_API_KEY=$secret_ref" \
+    "GATEWAY_BASE_URL=$endpoint" \
+    "GATEWAY_MODEL=${GATEWAY_MODEL:-gpt-5.5}" \
+    python3 "$SCRIPT_DIR/validate-responses-contract.py" --include-tool-call
+}
+
+case "${1:-help}" in
+  check) run_check ;;
+  build) run_build ;;
+  plan) run_plan ;;
+  deploy) run_deploy ;;
+  status) run_status ;;
+  provision-key) run_provision_key ;;
+  codex-config) run_codex_config ;;
+  validate) run_validate ;;
+  help|-h|--help) usage ;;
+  *) usage >&2; die "unknown command: $1" ;;
+esac

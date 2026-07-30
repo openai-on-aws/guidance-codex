@@ -71,7 +71,6 @@ aws cloudformation deploy \
   --region "$AWS_REGION" \
   --parameter-overrides \
       NetworkingStackName="$NETWORKING_STACK" \
-      LiteLLMMasterKey="$MASTER_KEY" \
       AwsRegion="$BEDROCK_REGION" \
       MantleProjectId=default \
       LiteLLMImage="$LITELLM_IMAGE" \

@@ -128,14 +128,15 @@ Outputs (all exported): `VpcId`, `PublicSubnet1`, `PublicSubnet2`,
 | `NetworkingStackName`      | String  | `codex-test-networking`    | Imports `<name>-VpcId` and `<name>-SubnetIds`. |
 | `OtelStackName`            | String  | `codex-test-otel-collector`| Imports `<name>-endpoint` only when `EnableOtel=true`. |
 | `EnableOtel`               | String  | `false`                    | Set to `true` only after deploying an OTel collector. |
-| `LiteLLMMasterKey`         | String  | —                          | `NoEcho`. Stored in Secrets Manager. |
+| `LiteLLMMasterKey`         | String  | `''`                       | Optional `NoEcho` override; blank generates the key in Secrets Manager. |
 | `DBUsername`               | String  | `litellm`                  | RDS username. RDS generates the password in Secrets Manager. |
 | `AwsRegion`                | String  | `us-east-1`                | Bedrock region for upstream calls. |
 | `MantleProjectId`          | String  | `default`                  | Mantle project allowed by the task role. |
 | `LiteLLMImage`             | String  | —                          | Required immutable ECR digest. |
 | `AllowedCidr`              | String  | `10.0.0.0/8`               | ALB ingress CIDR. **Never** `0.0.0.0/0`. |
-| `AlbCertificateArn`        | String  | —                          | Required ACM certificate ARN for HTTPS listener. |
-| `AlbDomainName`            | String  | `''`                       | Optional DNS name matching `AlbCertificateArn`; used in endpoint output. |
+| `AlbCertificateArn`        | String  | `''`                       | Optional existing ACM certificate ARN. |
+| `AlbDomainName`            | String  | `''`                       | DNS name matching the managed or existing certificate. |
+| `Route53HostedZoneId`      | String  | `''`                       | Public zone used to create a managed certificate and ALB alias. |
 | `EnableJwtMiddleware`      | String  | `false`                    | `true` swaps API-key auth for OIDC JWT validation. |
 | `JwtMiddlewareImage`       | String  | `''`                       | Required when `EnableJwtMiddleware=true`. |
 | `JwksUrl`                  | String  | `''`                       | IdP JWKS endpoint. |
@@ -148,8 +149,9 @@ WAF, alarm, and deletion-protection parameters. See
 [`docs/PRODUCTION_DEPLOYMENT.md`](../../docs/PRODUCTION_DEPLOYMENT.md) for the
 production profile.
 
-Outputs: `GatewayEndpoint` (exported as `${StackName}-GatewayEndpoint`),
-`OtelEndpoint` (only when `EnableOtel=true`), `DatabaseSecretArn`, and
+Outputs include `GatewayEndpoint` (exported as
+`${StackName}-GatewayEndpoint`), `GatewayAdminEndpoint`,
+`GatewayCertificateArn`, `LiteLLMSecretArn`, `DatabaseSecretArn`, and
 `WebAclArn` (only when `EnableWaf=true`).
 
 ## Quick Start: Native AWS Access (IAM Identity Center)
@@ -201,14 +203,11 @@ aws cloudformation deploy \
       NetworkingStackName=codex-networking \
       OtelStackName=codex-otel-collector \
       EnableOtel=false \
-      LiteLLMMasterKey=$(aws secretsmanager get-random-password \
-                            --exclude-punctuation --password-length 40 \
-                            --query RandomPassword --output text) \
       DBUsername=litellm \
       AwsRegion=us-east-1 \
       LiteLLMImage=<account>.dkr.ecr.<region>.amazonaws.com/codex-litellm@sha256:<digest> \
-      AlbCertificateArn=arn:aws:acm:<region>:<account>:certificate/<id> \
       AlbDomainName=litellm.example.com \
+      Route53HostedZoneId=Z0123456789EXAMPLE \
       AllowedCidr=10.0.0.0/8
 
 # 4) (Optional) Gateway dashboard
@@ -223,8 +222,9 @@ aws cloudformation describe-stacks \
   --output text
 ```
 
-The `GatewayEndpoint` output is what Codex points at via `OPENAI_BASE_URL` in
-its config. See `docs/QUICKSTART_LLM_GATEWAY.md` for the full flow.
+The `GatewayEndpoint` output is the custom provider `base_url` in the
+user-level Codex config. See `docs/QUICKSTART_LLM_GATEWAY_LITELLM.md` for the
+full flow.
 
 ## Validation
 

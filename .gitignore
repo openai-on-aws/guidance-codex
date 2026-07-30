@@ -3,6 +3,8 @@ deployment/binaries/
 
 # Local gateway credentials (master key + DB password) — never commit
 deployment/litellm/.env.gateway
+deployment/litellm/.env.deploy
+deployment/litellm/.deploy-state
 
 # Rendered per-developer sidecar configs (contain identity/org attributes)
 # produced by generate-sidecar-config.sh — never commit

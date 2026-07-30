@@ -22,6 +22,7 @@ ECR_REFERENCE = re.compile(
 CERTIFICATE_ARN = re.compile(
     r"^arn:[^:]+:acm:(?P<region>[a-z0-9-]+):[0-9]{12}:certificate/.+$"
 )
+HOSTED_ZONE_ID = re.compile(r"^(?:/hostedzone/)?Z[A-Z0-9]+$")
 
 
 def run(command: list[str]) -> subprocess.CompletedProcess:
@@ -32,6 +33,29 @@ def run(command: list[str]) -> subprocess.CompletedProcess:
         text=True,
         timeout=30,
     )
+
+
+def find_aws_cli(environ: dict[str, str]) -> tuple[str | None, str]:
+    candidates = [
+        environ.get("AWS_CLI"),
+        shutil.which("aws"),
+        "/usr/local/bin/aws",
+        "/opt/homebrew/bin/aws",
+    ]
+    checked = set()
+    fallback_version = ""
+    for candidate in candidates:
+        if not candidate or candidate in checked:
+            continue
+        checked.add(candidate)
+        if not os.path.isfile(candidate) or not os.access(candidate, os.X_OK):
+            continue
+        result = run([candidate, "--version"])
+        version = (result.stdout or result.stderr).strip()
+        fallback_version = fallback_version or version
+        if result.returncode == 0 and version.startswith("aws-cli/2."):
+            return candidate, version
+    return None, fallback_version
 
 
 def validate_digest_reference(value: str) -> bool:
@@ -45,10 +69,16 @@ def parse_ecr_reference(value: str) -> dict[str, str] | None:
 
 def validate_cidr(value: str) -> bool:
     try:
-        ipaddress.ip_network(value, strict=False)
+        network = ipaddress.ip_network(value, strict=False)
     except ValueError:
         return False
-    return True
+    return network.version == 4 and network.prefixlen > 0
+
+
+def hostname_in_zone(hostname: str, zone_name: str) -> bool:
+    hostname = hostname.rstrip(".").lower()
+    zone_name = zone_name.rstrip(".").lower()
+    return hostname == zone_name or hostname.endswith(f".{zone_name}")
 
 
 def check_environment(
@@ -61,8 +91,8 @@ def check_environment(
         required.extend(
             [
                 "BEDROCK_REGION",
-                "ALB_CERTIFICATE_ARN",
                 "ALLOWED_CIDR",
+                "GATEWAY_DOMAIN_NAME",
                 "LITELLM_IMAGE",
             ]
         )
@@ -80,7 +110,7 @@ def check_environment(
 
     cidr = environ.get("ALLOWED_CIDR", "") if stage == "deploy" else ""
     if cidr and not validate_cidr(cidr):
-        errors.append("ALLOWED_CIDR is not a valid IPv4 or IPv6 network")
+        errors.append("ALLOWED_CIDR must be a restricted IPv4 network")
 
     certificate = (
         environ.get("ALB_CERTIFICATE_ARN", "") if stage == "deploy" else ""
@@ -93,10 +123,15 @@ def check_environment(
     ):
         errors.append("ALB certificate and gateway stack must be in the same region")
 
-    if stage == "deploy" and not environ.get("GATEWAY_DOMAIN_NAME"):
-        warnings.append(
-            "GATEWAY_DOMAIN_NAME is not set; the raw ALB hostname is unsuitable "
-            "for a trusted Codex endpoint"
+    hosted_zone = (
+        environ.get("ROUTE53_HOSTED_ZONE_ID", "") if stage == "deploy" else ""
+    )
+    if hosted_zone and not HOSTED_ZONE_ID.fullmatch(hosted_zone):
+        errors.append("ROUTE53_HOSTED_ZONE_ID is not a valid hosted zone ID")
+    if stage == "deploy" and not certificate and not hosted_zone:
+        errors.append(
+            "Set ROUTE53_HOSTED_ZONE_ID for a managed certificate or "
+            "ALB_CERTIFICATE_ARN for an existing certificate"
         )
     return errors, warnings
 
@@ -118,22 +153,15 @@ def main() -> int:
 
     errors, warnings = check_environment(os.environ, args.stage)
 
-    if not shutil.which("aws"):
-        errors.append("AWS CLI is not installed")
-        aws_version = ""
-    else:
-        result = run(["aws", "--version"])
-        aws_version = (result.stdout or result.stderr).strip()
-        if result.returncode != 0:
-            errors.append("AWS CLI version check failed")
-        elif not aws_version.startswith("aws-cli/2."):
-            errors.append(f"AWS CLI v2 is required; found {aws_version or 'unknown'}")
+    aws_cli, aws_version = find_aws_cli(os.environ)
+    if not aws_cli:
+        errors.append(f"AWS CLI v2 is required; found {aws_version or 'nothing'}")
 
     identity = None
-    if not errors or shutil.which("aws"):
+    if aws_cli:
         result = run(
             [
-                "aws",
+                aws_cli,
                 "sts",
                 "get-caller-identity",
                 "--region",
@@ -149,6 +177,33 @@ def main() -> int:
                 identity = json.loads(result.stdout)
             except json.JSONDecodeError:
                 errors.append("AWS identity response was not valid JSON")
+
+    hosted_zone = os.environ.get("ROUTE53_HOSTED_ZONE_ID", "")
+    domain_name = os.environ.get("GATEWAY_DOMAIN_NAME", "")
+    if args.stage == "deploy" and hosted_zone and aws_cli:
+        result = run(
+            [
+                aws_cli,
+                "route53",
+                "get-hosted-zone",
+                "--id",
+                hosted_zone,
+                "--output",
+                "json",
+            ]
+        )
+        if result.returncode != 0:
+            errors.append("ROUTE53_HOSTED_ZONE_ID was not found or is not accessible")
+        else:
+            try:
+                zone_name = json.loads(result.stdout)["HostedZone"]["Name"]
+            except (json.JSONDecodeError, KeyError, TypeError):
+                errors.append("Route 53 hosted zone response was not valid JSON")
+            else:
+                if not hostname_in_zone(domain_name, zone_name):
+                    errors.append(
+                        "GATEWAY_DOMAIN_NAME is not inside ROUTE53_HOSTED_ZONE_ID"
+                    )
 
     if args.stage == "build" and not shutil.which("docker"):
         errors.append("Docker is not installed")
@@ -171,10 +226,10 @@ def main() -> int:
 
     if args.check_ecr_image and args.stage != "deploy":
         errors.append("--check-ecr-image requires --stage deploy")
-    elif args.check_ecr_image and image_parts and shutil.which("aws"):
+    elif args.check_ecr_image and image_parts and aws_cli:
         result = run(
             [
-                "aws",
+                aws_cli,
                 "ecr",
                 "describe-images",
                 "--repository-name",
@@ -201,7 +256,7 @@ def main() -> int:
         summary = "CLI v2, AWS identity, Docker, buildx, and base-image digest"
     else:
         summary = (
-            "CLI v2, AWS identity, environment, certificate, CIDR, "
+            "CLI v2, AWS identity, environment, TLS, DNS, CIDR, "
             "and immutable deployment image"
         )
     print(f"LiteLLM {args.stage} preflight passed: {summary}.")

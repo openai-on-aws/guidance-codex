@@ -134,21 +134,21 @@ model = "gpt-5.5"  # Prefer the latest GPT-5 family model your gateway exposes
 [model_providers.my-gateway]
 name = "My LLM Gateway"
 base_url = "<gateway-endpoint>"  # Paste the exact GatewayEndpoint value from your admin, including scheme and /v1
-env_key = "OPENAI_API_KEY"
 wire_api = "responses"  # Optional but explicit; custom providers default to Responses
+
+[model_providers.my-gateway.auth]
+command = "/absolute/path/to/your-secret-or-token-resolver"
+args = ["print-gateway-token"]
+refresh_interval_ms = 300000
 ```
 
 Keep gateway provider settings in user-level `~/.codex/config.toml`; Codex
 ignores `model_provider` and `model_providers` in project-local
 `.codex/config.toml` files. If your gateway exposes different aliases, swap the
-`model` string accordingly. If your gateway expects OpenAI authentication
-instead of a gateway-specific API key, use `requires_openai_auth = true`
-instead of `env_key`, per the Codex auth docs for custom providers.
+`model` string accordingly. For a shell-provided development key, replace the
+`auth` table with `env_key = "GATEWAY_API_KEY"`.
 
 ```bash
-# Set API key (get from gateway admin)
-export OPENAI_API_KEY=<your-api-key>
-
 # Test
 codex exec "Hello world"
 ```
@@ -160,12 +160,12 @@ For advanced configuration, see [OpenAI Codex documentation](https://developers.
 After setup, the everyday loop is just:
 
 ```bash
-export OPENAI_API_KEY=<your-gateway-key-or-oidc-token>   # if not already in your shell profile
-codex exec "..."                                          # Codex forwards it as the bearer
+codex exec "..."
 ```
 
-- **Static gateway API key** (e.g. a LiteLLM-issued `sk-…`): set it once in your
-  shell profile; it lasts until the admin rotates or revokes it — no per-session step.
+- **Static gateway API key** (for example, a LiteLLM-issued key): resolve it
+  from an approved secret store rather than committing it or placing it in shell
+  startup files.
 - **OIDC/JWT to the gateway:** the token is short-lived. For hands-off refresh, point
   the provider at a token-fetch `auth` command (`[model_providers.<name>.auth]` with
   `command` + `refresh_interval_ms`) — Codex runs it and refreshes automatically. With

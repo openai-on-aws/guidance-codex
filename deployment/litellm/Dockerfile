@@ -1,6 +1,6 @@
 # Pass a reviewed immutable digest, for example:
 # ghcr.io/berriai/litellm@sha256:<64-hex-digest>
-ARG LITELLM_BASE_IMAGE
+ARG LITELLM_BASE_IMAGE=ghcr.io/berriai/litellm@sha256:65d84a2282137b4dc73bbe184650a7c807177c533e4223b3bfbc87963fe3fabe
 FROM ${LITELLM_BASE_IMAGE}
 
 # Install OpenTelemetry SDK for metrics export and the official Bedrock
@@ -8,10 +8,10 @@ FROM ${LITELLM_BASE_IMAGE}
 RUN /usr/bin/python -m ensurepip --upgrade \
     && /usr/bin/python -m pip install --no-cache-dir \
     --target /app/.venv/lib/python3.13/site-packages \
-    aws-bedrock-token-generator \
-    opentelemetry-api \
-    opentelemetry-sdk \
-    opentelemetry-exporter-otlp-proto-http
+    aws-bedrock-token-generator==1.1.0 \
+    opentelemetry-api==1.44.0 \
+    opentelemetry-sdk==1.44.0 \
+    opentelemetry-exporter-otlp-proto-http==1.44.0
 
 RUN set -eux; \
     if command -v useradd >/dev/null 2>&1; then \

@@ -24,8 +24,9 @@ Parameters:
 
   LiteLLMMasterKey:
     Type: String
+    Default: ""
     NoEcho: true
-    Description: LiteLLM master key - stored in Secrets Manager
+    Description: Optional LiteLLM master key override. Leave blank to generate it in Secrets Manager.
 
   DBUsername:
     Type: String
@@ -186,14 +187,22 @@ Parameters:
 
   AlbCertificateArn:
     Type: String
-    AllowedPattern: ".+"
-    ConstraintDescription: ACM certificate ARN is required for HTTPS.
-    Description: ACM certificate ARN. The ALB listener uses HTTPS on port 443.
+    Default: ""
+    AllowedPattern: "^$|arn:[^:]+:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+"
+    ConstraintDescription: Must be blank or a valid ACM certificate ARN.
+    Description: Optional existing ACM certificate ARN. Leave blank to create one using Route53HostedZoneId.
 
   AlbDomainName:
     Type: String
     Default: ""
-    Description: Optional DNS name that resolves to the ALB and matches AlbCertificateArn. Recommended for trusted HTTPS; if omitted, GatewayEndpoint falls back to the raw ALB DNS name for low-level smoke testing only.
+    Description: DNS name that resolves to the ALB and matches the certificate.
+
+  Route53HostedZoneId:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|(?:/hostedzone/)?Z[A-Z0-9]+$"
+    ConstraintDescription: Must be blank or a Route 53 public hosted zone ID.
+    Description: Optional public hosted zone ID used to create the certificate and alias record.
 
   # JWT Middleware Parameters (optional - for OIDC authentication)
   EnableJwtMiddleware:
@@ -239,6 +248,22 @@ Parameters:
       Example: codex-user-key-mapping
 
 Rules:
+  AllowedCidrRestricted:
+    Assertions:
+      - Assert: !Not [!Equals [!Ref AllowedCidr, "0.0.0.0/0"]]
+        AssertDescription: AllowedCidr must not expose the gateway to the entire internet.
+  TlsConfigurationComplete:
+    Assertions:
+      - Assert: !Or
+          - !Not [!Equals [!Ref AlbCertificateArn, ""]]
+          - !And
+            - !Not [!Equals [!Ref AlbDomainName, ""]]
+            - !Not [!Equals [!Ref Route53HostedZoneId, ""]]
+        AssertDescription: Provide AlbCertificateArn, or provide both AlbDomainName and Route53HostedZoneId.
+      - Assert: !Or
+          - !Equals [!Ref Route53HostedZoneId, ""]
+          - !Not [!Equals [!Ref AlbDomainName, ""]]
+        AssertDescription: AlbDomainName is required when Route53HostedZoneId is provided.
   JwtConfigurationComplete:
     RuleCondition: !Equals [!Ref EnableJwtMiddleware, "true"]
     Assertions:
@@ -254,9 +279,16 @@ Rules:
         AssertDescription: UserKeyMappingStackName is required when JWT middleware is enabled.
 
 Conditions:
+  HasProvidedLiteLLMMasterKey: !Not [!Equals [!Ref LiteLLMMasterKey, ""]]
+  HasAlbCertificateArn: !Not [!Equals [!Ref AlbCertificateArn, ""]]
+  CreateManagedCertificate: !And
+    - !Equals [!Ref AlbCertificateArn, ""]
+    - !Not [!Equals [!Ref AlbDomainName, ""]]
+    - !Not [!Equals [!Ref Route53HostedZoneId, ""]]
   UseJwtMiddleware: !Equals [!Ref EnableJwtMiddleware, "true"]
   OtelEnabled: !Equals [!Ref EnableOtel, "true"]
   HasAlbDomainName: !Not [!Equals [!Ref AlbDomainName, ""]]
+  HasRoute53HostedZoneId: !Not [!Equals [!Ref Route53HostedZoneId, ""]]
   HasTaskSubnetIds: !Not [!Equals [!Ref TaskSubnetIds, ""]]
   HasDatabaseSubnetIds: !Not [!Equals [!Ref DatabaseSubnetIds, ""]]
   HasAlbSubnetIds: !Not [!Equals [!Ref AlbSubnetIds, ""]]
@@ -323,7 +355,17 @@ Resources:
     Properties:
       Name: !Sub "${AWS::StackName}/litellm-secrets"
       KmsKeyId: !Ref LiteLLMKmsKey
-      SecretString: !Sub '{"LITELLM_MASTER_KEY":"${LiteLLMMasterKey}"}'
+      SecretString: !If
+        - HasProvidedLiteLLMMasterKey
+        - !Sub '{"LITELLM_MASTER_KEY":"${LiteLLMMasterKey}"}'
+        - !Ref AWS::NoValue
+      GenerateSecretString: !If
+        - HasProvidedLiteLLMMasterKey
+        - !Ref AWS::NoValue
+        - SecretStringTemplate: "{}"
+          GenerateStringKey: LITELLM_MASTER_KEY
+          PasswordLength: 48
+          ExcludePunctuation: true
 
   # --- IAM ---
 
@@ -356,11 +398,6 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
-          - Effect: Allow
-            Action:
-              - bedrock:InvokeModel
-              - bedrock:InvokeModelWithResponseStream
-            Resource: !Sub "arn:${AWS::Partition}:bedrock:${AwsRegion}::foundation-model/*"
           - Effect: Allow
             Action:
               - bedrock:CallWithBearerToken
@@ -681,6 +718,9 @@ Resources:
       RequiresCompatibilities: [FARGATE]
       Cpu: "1024"
       Memory: "2048"
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
       ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
       TaskRoleArn: !GetAtt TaskRole.Arn
       ContainerDefinitions:
@@ -689,6 +729,7 @@ Resources:
           Image: !Ref LiteLLMImage
           PortMappings:
             - ContainerPort: 4000
+          StopTimeout: 60
           Command: ["--config", "/app/config.yaml", "--port", "4000"]
           Environment:
             - Name: AWS_REGION
@@ -738,6 +779,7 @@ Resources:
               awslogs-group: !Ref LogGroup
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: litellm
+              mode: blocking
 
         # JWT Middleware Container (conditional - only if EnableJwtMiddleware=true)
         - !If
@@ -772,6 +814,7 @@ Resources:
                 awslogs-group: !Ref LogGroup
                 awslogs-region: !Ref AWS::Region
                 awslogs-stream-prefix: jwt-middleware
+                mode: blocking
           - !Ref AWS::NoValue
 
   # --- ALB ---
@@ -815,6 +858,19 @@ Resources:
       TargetType: ip
       # If JWT middleware enabled, use /health, otherwise use LiteLLM's /health/liveliness
       HealthCheckPath: !If [UseJwtMiddleware, /health, /health/liveliness]
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+
+  ManagedCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Condition: CreateManagedCertificate
+    Properties:
+      DomainName: !Ref AlbDomainName
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref AlbDomainName
+          HostedZoneId: !Ref Route53HostedZoneId
 
   ALBListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
@@ -824,7 +880,10 @@ Resources:
       Protocol: HTTPS
       SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
       Certificates:
-        - CertificateArn: !Ref AlbCertificateArn
+        - CertificateArn: !If
+            - HasAlbCertificateArn
+            - !Ref AlbCertificateArn
+            - !Ref ManagedCertificate
       DefaultActions:
         - Type: forward
           TargetGroupArn: !Ref ALBTargetGroup
@@ -838,6 +897,7 @@ Resources:
       Cluster: !Ref ECSCluster
       TaskDefinition: !Ref TaskDefinition
       LaunchType: FARGATE
+      PlatformVersion: LATEST
       DesiredCount: !Ref DesiredCount
       HealthCheckGracePeriodSeconds: 120
       NetworkConfiguration:
@@ -862,6 +922,18 @@ Resources:
         DeploymentCircuitBreaker:
           Enable: true
           Rollback: true
+
+  GatewayAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasRoute53HostedZoneId
+    Properties:
+      HostedZoneId: !Ref Route53HostedZoneId
+      Name: !Ref AlbDomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt ALB.DNSName
+        HostedZoneId: !GetAtt ALB.CanonicalHostedZoneID
+        EvaluateTargetHealth: true
 
   ECSServiceScalableTarget:
     Type: AWS::ApplicationAutoScaling::ScalableTarget
@@ -993,6 +1065,13 @@ Resources:
         - !Ref AWS::NoValue
 
 Outputs:
+  GatewayAdminEndpoint:
+    Description: LiteLLM gateway root URL for administrative endpoints such as /key/generate.
+    Value: !If
+      - HasAlbDomainName
+      - !Sub "https://${AlbDomainName}"
+      - !Sub "https://${ALB.DNSName}"
+
   GatewayEndpoint:
     Description: LiteLLM gateway URL. When AlbDomainName is blank, this falls back to the raw ALB DNS name and is suitable only for low-level smoke testing because the ACM certificate will not match that hostname.
     Value: !If
@@ -1011,6 +1090,21 @@ Outputs:
   DatabaseSecretArn:
     Description: RDS-managed Secrets Manager secret containing the database username and password.
     Value: !GetAtt RDSInstance.MasterUserSecret.SecretArn
+
+  LiteLLMSecretArn:
+    Description: Secrets Manager secret containing the generated or supplied LiteLLM master key.
+    Value: !Ref LiteLLMSecret
+
+  LiteLLMKmsKeyArn:
+    Description: KMS key used for LiteLLM secrets and logs.
+    Value: !GetAtt LiteLLMKmsKey.Arn
+
+  GatewayCertificateArn:
+    Description: ACM certificate used by the HTTPS listener.
+    Value: !If
+      - HasAlbCertificateArn
+      - !Ref AlbCertificateArn
+      - !Ref ManagedCertificate
 
   WebAclArn:
     Condition: WafEnabled

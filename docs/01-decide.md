@@ -21,7 +21,7 @@ priorities on the two axes that matter: *managed-vs-self-run ops* and
 | **Path to Bedrock** | Codex → Bedrock (native AWS SDK) | Codex → managed gateway → Bedrock | Codex → self-run gateway → Bedrock |
 | **Infra you operate** | None | None (managed/serverless) | ECS + RDS + ALB |
 | **GPT-5.x via Bedrock Mantle** | ✅ Native | ✅ Built-in `bedrock-mantle` connector | ✅ Custom config |
-| **Developer Command** | `aws sso login` | `export AGENTCORE_TOKEN=<oidc-jwt>` | `export OPENAI_API_KEY=...` |
+| **Developer Command** | `aws sso login` | `export AGENTCORE_TOKEN=<oidc-jwt>` | `codex` with a key or token resolver |
 | **Per-user Bedrock CloudTrail / CUR** | ✅ Native | ❌ Gateway role only | ❌ Gateway role only |
 | **Soft Alerts (CloudWatch)** | Optional | ✅ `AWS/BedrockMantle` metrics | Optional |
 | **Hard Budget Limits** | ❌ No | ❌ No (not built-in) | Optional |
