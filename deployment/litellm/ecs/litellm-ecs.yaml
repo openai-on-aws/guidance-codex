@@ -80,6 +80,12 @@ Parameters:
     AllowedValues: ["true", "false"]
     Description: Enable for staging and production after the first successful deployment.
 
+  DBMultiAz:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Keep true for production. Set false for a disposable walkthrough to reduce cost and deployment time.
+
   AwsRegion:
     Type: String
     Default: us-east-1
@@ -157,6 +163,14 @@ Parameters:
     Default: "false"
     AllowedValues: ["true", "false"]
     Description: Attach a regional WAF web ACL with managed protections and rate limiting.
+
+  EnableTls:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Keep true for every staging or production deployment. Set false only for
+      a short-lived, CIDR-restricted walkthrough that uses the raw ALB HTTP endpoint.
 
   WafRateLimit:
     Type: Number
@@ -253,6 +267,7 @@ Rules:
       - Assert: !Not [!Equals [!Ref AllowedCidr, "0.0.0.0/0"]]
         AssertDescription: AllowedCidr must not expose the gateway to the entire internet.
   TlsConfigurationComplete:
+    RuleCondition: !Equals [!Ref EnableTls, "true"]
     Assertions:
       - Assert: !Or
           - !Not [!Equals [!Ref AlbCertificateArn, ""]]
@@ -264,6 +279,15 @@ Rules:
           - !Equals [!Ref Route53HostedZoneId, ""]
           - !Not [!Equals [!Ref AlbDomainName, ""]]
         AssertDescription: AlbDomainName is required when Route53HostedZoneId is provided.
+  PlainHttpDemoConfiguration:
+    RuleCondition: !Equals [!Ref EnableTls, "false"]
+    Assertions:
+      - Assert: !Equals [!Ref AlbCertificateArn, ""]
+        AssertDescription: AlbCertificateArn must be blank when EnableTls=false.
+      - Assert: !Equals [!Ref AlbDomainName, ""]
+        AssertDescription: AlbDomainName must be blank when EnableTls=false.
+      - Assert: !Equals [!Ref Route53HostedZoneId, ""]
+        AssertDescription: Route53HostedZoneId must be blank when EnableTls=false.
   JwtConfigurationComplete:
     RuleCondition: !Equals [!Ref EnableJwtMiddleware, "true"]
     Assertions:
@@ -279,9 +303,12 @@ Rules:
         AssertDescription: UserKeyMappingStackName is required when JWT middleware is enabled.
 
 Conditions:
+  TlsEnabled: !Equals [!Ref EnableTls, "true"]
+  DBMultiAzEnabled: !Equals [!Ref DBMultiAz, "true"]
   HasProvidedLiteLLMMasterKey: !Not [!Equals [!Ref LiteLLMMasterKey, ""]]
   HasAlbCertificateArn: !Not [!Equals [!Ref AlbCertificateArn, ""]]
   CreateManagedCertificate: !And
+    - !Equals [!Ref EnableTls, "true"]
     - !Equals [!Ref AlbCertificateArn, ""]
     - !Not [!Equals [!Ref AlbDomainName, ""]]
     - !Not [!Equals [!Ref Route53HostedZoneId, ""]]
@@ -289,6 +316,9 @@ Conditions:
   OtelEnabled: !Equals [!Ref EnableOtel, "true"]
   HasAlbDomainName: !Not [!Equals [!Ref AlbDomainName, ""]]
   HasRoute53HostedZoneId: !Not [!Equals [!Ref Route53HostedZoneId, ""]]
+  CreateDnsAlias: !And
+    - !Equals [!Ref EnableTls, "true"]
+    - !Not [!Equals [!Ref Route53HostedZoneId, ""]]
   HasTaskSubnetIds: !Not [!Equals [!Ref TaskSubnetIds, ""]]
   HasDatabaseSubnetIds: !Not [!Equals [!Ref DatabaseSubnetIds, ""]]
   HasAlbSubnetIds: !Not [!Equals [!Ref AlbSubnetIds, ""]]
@@ -479,10 +509,10 @@ Resources:
         Fn::Sub: "${NetworkingStackName}-VpcId"
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
+          FromPort: !If [TlsEnabled, 443, 80]
+          ToPort: !If [TlsEnabled, 443, 80]
           CidrIp: !Ref AllowedCidr
-          Description: Allow ALB traffic from the configured CIDR
+          Description: Allow the configured gateway listener from the configured CIDR
       SecurityGroupEgress: []
 
   ALBLogsBucket:
@@ -678,7 +708,7 @@ Resources:
       StorageEncrypted: true
       KmsKeyId: !GetAtt LiteLLMKmsKey.Arn
       EnableIAMDatabaseAuthentication: true
-      MultiAZ: true
+      MultiAZ: !If [DBMultiAzEnabled, true, false]
       MonitoringInterval: !Ref RDSMonitoringInterval
       MonitoringRoleArn: !GetAtt RDSMonitoringRole.Arn
       DBSubnetGroupName: !Ref DBSubnetGroup
@@ -876,14 +906,19 @@ Resources:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
       LoadBalancerArn: !Ref ALB
-      Port: 443
-      Protocol: HTTPS
-      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
-      Certificates:
-        - CertificateArn: !If
-            - HasAlbCertificateArn
-            - !Ref AlbCertificateArn
-            - !Ref ManagedCertificate
+      Port: !If [TlsEnabled, 443, 80]
+      Protocol: !If [TlsEnabled, HTTPS, HTTP]
+      SslPolicy: !If
+        - TlsEnabled
+        - ELBSecurityPolicy-TLS13-1-2-2021-06
+        - !Ref AWS::NoValue
+      Certificates: !If
+        - TlsEnabled
+        - - CertificateArn: !If
+              - HasAlbCertificateArn
+              - !Ref AlbCertificateArn
+              - !Ref ManagedCertificate
+        - !Ref AWS::NoValue
       DefaultActions:
         - Type: forward
           TargetGroupArn: !Ref ALBTargetGroup
@@ -925,7 +960,7 @@ Resources:
 
   GatewayAliasRecord:
     Type: AWS::Route53::RecordSet
-    Condition: HasRoute53HostedZoneId
+    Condition: CreateDnsAlias
     Properties:
       HostedZoneId: !Ref Route53HostedZoneId
       Name: !Ref AlbDomainName
@@ -1068,16 +1103,22 @@ Outputs:
   GatewayAdminEndpoint:
     Description: LiteLLM gateway root URL for administrative endpoints such as /key/generate.
     Value: !If
-      - HasAlbDomainName
-      - !Sub "https://${AlbDomainName}"
-      - !Sub "https://${ALB.DNSName}"
+      - TlsEnabled
+      - !If
+        - HasAlbDomainName
+        - !Sub "https://${AlbDomainName}"
+        - !Sub "https://${ALB.DNSName}"
+      - !Sub "http://${ALB.DNSName}"
 
   GatewayEndpoint:
-    Description: LiteLLM gateway URL. When AlbDomainName is blank, this falls back to the raw ALB DNS name and is suitable only for low-level smoke testing because the ACM certificate will not match that hostname.
+    Description: LiteLLM /v1 URL. The HTTP form is only for a short-lived, CIDR-restricted walkthrough.
     Value: !If
-      - HasAlbDomainName
-      - !Sub "https://${AlbDomainName}/v1"
-      - !Sub "https://${ALB.DNSName}/v1"
+      - TlsEnabled
+      - !If
+        - HasAlbDomainName
+        - !Sub "https://${AlbDomainName}/v1"
+        - !Sub "https://${ALB.DNSName}/v1"
+      - !Sub "http://${ALB.DNSName}/v1"
     Export:
       Name: !Sub "${AWS::StackName}-GatewayEndpoint"
 
@@ -1100,6 +1141,7 @@ Outputs:
     Value: !GetAtt LiteLLMKmsKey.Arn
 
   GatewayCertificateArn:
+    Condition: TlsEnabled
     Description: ACM certificate used by the HTTPS listener.
     Value: !If
       - HasAlbCertificateArn

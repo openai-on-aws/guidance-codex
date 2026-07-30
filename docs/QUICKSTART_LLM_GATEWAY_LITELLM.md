@@ -150,10 +150,27 @@ export NETWORKING_STACK=codex-networking
 aws cloudformation deploy \
   --stack-name "$NETWORKING_STACK" \
   --template-file deployment/infrastructure/networking.yaml \
-  --capabilities CAPABILITY_NAMED_IAM \
   --region "$AWS_REGION" \
   --parameter-overrides VpcCidr=10.0.0.0/16
 ```
+
+To reuse an existing VPC, deploy the same export adapter with two public
+subnets in different availability zones:
+
+```bash
+aws cloudformation deploy \
+  --stack-name "$NETWORKING_STACK" \
+  --template-file deployment/infrastructure/networking.yaml \
+  --region "$AWS_REGION" \
+  --parameter-overrides \
+      ExistingVpcId="$EXISTING_VPC_ID" \
+      ExistingPublicSubnet1="$EXISTING_PUBLIC_SUBNET_1" \
+      ExistingPublicSubnet2="$EXISTING_PUBLIC_SUBNET_2"
+```
+
+The existing subnets must have routes to an internet gateway for the
+internet-facing ALB. For production, use the separate ALB, task, and database
+subnet parameters described in `docs/PRODUCTION_DEPLOYMENT.md`.
 
 ### Step 4 (Optional): Gateway telemetry
 
@@ -223,6 +240,24 @@ export LITELLM_SECRET_ARN=$(aws cloudformation describe-stacks \
   --query 'Stacks[0].Outputs[?OutputKey==`LiteLLMSecretArn`].OutputValue' --output text)
 export MASTER_KEY_REF="{{resolve:secretsmanager:${LITELLM_SECRET_ARN}:SecretString:LITELLM_MASTER_KEY}}"
 ```
+
+For a short-lived walkthrough when no trusted DNS name is available, the
+automation supports a raw ALB HTTP endpoint:
+
+```bash
+export ENABLE_TLS=false
+export GATEWAY_DOMAIN_NAME=
+export ROUTE53_HOSTED_ZONE_ID=
+export ALB_CERTIFICATE_ARN=
+export ALLOWED_CIDR="$(curl -fsS https://checkip.amazonaws.com)/32"
+export DB_MULTI_AZ=false
+CONFIRM_AWS_WRITE=1 make litellm-deploy
+```
+
+This mode remains protected by the configured `/32`, API-key authentication,
+and optional WAF, but it does not encrypt client-to-ALB traffic. Use it only to
+capture a temporary walkthrough, then delete the stack. Staging and production
+must keep `EnableTls=true`.
 
 The bundled LiteLLM image now uses LiteLLM's documented
 `bedrock_mantle/openai.gpt-5.x` provider and refreshes

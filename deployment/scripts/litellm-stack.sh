@@ -24,10 +24,13 @@ BEDROCK_REGION="${BEDROCK_REGION:-$AWS_REGION}"
 NETWORKING_STACK="${NETWORKING_STACK:-codex-networking}"
 GATEWAY_STACK="${GATEWAY_STACK:-codex-litellm-gateway}"
 LITELLM_REPO="${LITELLM_REPO:-codex-litellm}"
+BUILDX_BUILDER="${BUILDX_BUILDER:-codex-builder}"
 DESIRED_COUNT="${DESIRED_COUNT:-1}"
 MIN_TASK_COUNT="${MIN_TASK_COUNT:-1}"
 MAX_TASK_COUNT="${MAX_TASK_COUNT:-2}"
 ENABLE_WAF="${ENABLE_WAF:-true}"
+ENABLE_TLS="${ENABLE_TLS:-true}"
+DB_MULTI_AZ="${DB_MULTI_AZ:-true}"
 ASSIGN_PUBLIC_IP="${ASSIGN_PUBLIC_IP:-ENABLED}"
 
 usage() {
@@ -46,8 +49,11 @@ Commands:
 
 Required configuration:
   Copy deployment/litellm/.env.deploy.example to .env.deploy and set:
-  AWS_PROFILE, AWS_REGION, LITELLM_BASE_IMAGE, GATEWAY_DOMAIN_NAME,
-  ALLOWED_CIDR, and either ROUTE53_HOSTED_ZONE_ID or ALB_CERTIFICATE_ARN.
+  AWS_PROFILE, AWS_REGION, LITELLM_BASE_IMAGE, and ALLOWED_CIDR.
+  With ENABLE_TLS=true, also set GATEWAY_DOMAIN_NAME and either
+  ROUTE53_HOSTED_ZONE_ID or ALB_CERTIFICATE_ARN.
+  To avoid creating a VPC, also set EXISTING_VPC_ID and two existing public
+  subnet IDs in different availability zones.
 
 Safety:
   build and deploy require CONFIRM_AWS_WRITE=1.
@@ -109,13 +115,17 @@ PY
 
 resolve_asm_exec() {
   local candidate="${ASM_EXEC:-}"
+  local aws_cli_dir
   if [[ -z "$candidate" ]]; then
     candidate="$(command -v asm-exec 2>/dev/null || true)"
   fi
   [[ -n "$candidate" && -x "$candidate" ]] || die \
     "asm-exec is required for runtime secret resolution; set ASM_EXEC to its executable path."
+  resolve_aws_cli
+  aws_cli_dir="$(dirname "$AWS_CLI")"
+  PATH="$aws_cli_dir:$PATH"
   ASM_EXEC="$candidate"
-  export ASM_EXEC
+  export ASM_EXEC PATH
 }
 
 confirm_write() {
@@ -172,10 +182,10 @@ run_build() {
 
   aws_cli ecr get-login-password --region "$AWS_REGION" |
     docker login --username AWS --password-stdin "$registry"
-  docker buildx inspect codex-builder >/dev/null 2>&1 ||
-    docker buildx create --name codex-builder >/dev/null
+  docker buildx inspect "$BUILDX_BUILDER" >/dev/null 2>&1 ||
+    docker buildx create --name "$BUILDX_BUILDER" >/dev/null
   docker buildx build \
-    --builder codex-builder \
+    --builder "$BUILDX_BUILDER" \
     --platform linux/amd64 \
     --build-arg "LITELLM_BASE_IMAGE=$LITELLM_BASE_IMAGE" \
     --tag "$tagged_image" \
@@ -210,8 +220,12 @@ gateway_parameters() {
     "MinTaskCount=$MIN_TASK_COUNT"
     "MaxTaskCount=$MAX_TASK_COUNT"
     "EnableWaf=$ENABLE_WAF"
+    "EnableTls=$ENABLE_TLS"
+    "DBMultiAz=$DB_MULTI_AZ"
   )
-  GATEWAY_PARAMETERS+=("AlbDomainName=$GATEWAY_DOMAIN_NAME")
+  if [[ -n "${GATEWAY_DOMAIN_NAME:-}" ]]; then
+    GATEWAY_PARAMETERS+=("AlbDomainName=$GATEWAY_DOMAIN_NAME")
+  fi
   if [[ -n "${ALB_CERTIFICATE_ARN:-}" ]]; then
     GATEWAY_PARAMETERS+=("AlbCertificateArn=$ALB_CERTIFICATE_ARN")
   fi
@@ -220,18 +234,76 @@ gateway_parameters() {
   fi
 }
 
+networking_parameters() {
+  NETWORKING_PARAMETERS=("VpcCidr=${VPC_CIDR:-10.0.0.0/16}")
+  if [[ -n "${EXISTING_VPC_ID:-}" ||
+        -n "${EXISTING_PUBLIC_SUBNET_1:-}" ||
+        -n "${EXISTING_PUBLIC_SUBNET_2:-}" ]]; then
+    require EXISTING_VPC_ID
+    require EXISTING_PUBLIC_SUBNET_1
+    require EXISTING_PUBLIC_SUBNET_2
+    [[ "$EXISTING_PUBLIC_SUBNET_1" != "$EXISTING_PUBLIC_SUBNET_2" ]] ||
+      die "EXISTING_PUBLIC_SUBNET_1 and EXISTING_PUBLIC_SUBNET_2 must differ."
+
+    local subnet_json
+    subnet_json="$(aws_cli ec2 describe-subnets \
+      --subnet-ids "$EXISTING_PUBLIC_SUBNET_1" "$EXISTING_PUBLIC_SUBNET_2" \
+      --region "$AWS_REGION" \
+      --output json)"
+    SUBNET_JSON="$subnet_json" python3 - "$EXISTING_VPC_ID" \
+      "$EXISTING_PUBLIC_SUBNET_1" "$EXISTING_PUBLIC_SUBNET_2" \
+      <<'PY' || die "Existing VPC/subnet validation failed."
+import json
+import os
+import sys
+
+vpc_id, *expected_subnets = sys.argv[1:]
+subnets = json.loads(os.environ["SUBNET_JSON"]).get("Subnets", [])
+actual_ids = {subnet["SubnetId"] for subnet in subnets}
+if actual_ids != set(expected_subnets):
+    raise SystemExit("AWS did not return both configured subnets")
+if any(subnet["VpcId"] != vpc_id for subnet in subnets):
+    raise SystemExit("configured subnets do not belong to EXISTING_VPC_ID")
+if len({subnet["AvailabilityZone"] for subnet in subnets}) != 2:
+    raise SystemExit("configured subnets must be in different availability zones")
+if any(subnet["State"] != "available" for subnet in subnets):
+    raise SystemExit("configured subnets must be available")
+PY
+    NETWORKING_PARAMETERS+=(
+      "ExistingVpcId=$EXISTING_VPC_ID"
+      "ExistingPublicSubnet1=$EXISTING_PUBLIC_SUBNET_1"
+      "ExistingPublicSubnet2=$EXISTING_PUBLIC_SUBNET_2"
+    )
+    log "Reusing VPC $EXISTING_VPC_ID with two validated subnets."
+  fi
+}
+
 check_deploy_inputs() {
   require LITELLM_BASE_IMAGE
   require LITELLM_IMAGE
   require ALLOWED_CIDR
-  require GATEWAY_DOMAIN_NAME
-  if [[ -z "${ALB_CERTIFICATE_ARN:-}" && -z "${ROUTE53_HOSTED_ZONE_ID:-}" ]]; then
-    die "Set ROUTE53_HOSTED_ZONE_ID for a managed certificate or ALB_CERTIFICATE_ARN for an existing certificate."
-  fi
+  case "$ENABLE_TLS" in
+    true)
+      require GATEWAY_DOMAIN_NAME
+      if [[ -z "${ALB_CERTIFICATE_ARN:-}" && -z "${ROUTE53_HOSTED_ZONE_ID:-}" ]]; then
+        die "Set ROUTE53_HOSTED_ZONE_ID for a managed certificate or ALB_CERTIFICATE_ARN for an existing certificate."
+      fi
+      ;;
+    false)
+      if [[ -n "${GATEWAY_DOMAIN_NAME:-}" ||
+            -n "${ALB_CERTIFICATE_ARN:-}" ||
+            -n "${ROUTE53_HOSTED_ZONE_ID:-}" ]]; then
+        die "GATEWAY_DOMAIN_NAME, ALB_CERTIFICATE_ARN, and ROUTE53_HOSTED_ZONE_ID must be blank when ENABLE_TLS=false."
+      fi
+      log "WARNING: TLS is disabled for a short-lived, CIDR-restricted walkthrough."
+      ;;
+    *) die "ENABLE_TLS must be true or false." ;;
+  esac
   check_identity
   AWS_CLI="$AWS_CLI" python3 "$SCRIPT_DIR/preflight-litellm.py" \
     --stage deploy --check-ecr-image
   gateway_parameters
+  networking_parameters
 }
 
 run_plan() {
@@ -243,6 +315,7 @@ run_plan() {
       --stack-name "$NETWORKING_STACK" \
       --template-file "$REPO_ROOT/deployment/infrastructure/networking.yaml" \
       --region "$AWS_REGION" \
+      --parameter-overrides "${NETWORKING_PARAMETERS[@]}" \
       --no-execute-changeset
     log "Execute the networking change set before planning the gateway."
     return
@@ -264,7 +337,7 @@ run_deploy() {
     --stack-name "$NETWORKING_STACK" \
     --template-file "$REPO_ROOT/deployment/infrastructure/networking.yaml" \
     --region "$AWS_REGION" \
-    --parameter-overrides "VpcCidr=${VPC_CIDR:-10.0.0.0/16}" \
+    --parameter-overrides "${NETWORKING_PARAMETERS[@]}" \
     --no-fail-on-empty-changeset
   aws_cli cloudformation deploy \
     --stack-name "$GATEWAY_STACK" \
@@ -302,7 +375,7 @@ secret_reference() {
 }
 
 master_secret_reference() {
-  secret_reference "$(stack_output LiteLLMSecretArn)" LITELLM_MASTER_KEY
+  secret_reference "$GATEWAY_STACK/litellm-secrets" LITELLM_MASTER_KEY
 }
 
 run_provision_key() {

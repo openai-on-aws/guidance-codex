@@ -114,9 +114,17 @@ Outputs: `RoleArn` (exported as `${StackName}-RoleArn`), `RoleName`,
 
 | Parameter              | Type   | Default        | Notes |
 | ---------------------- | ------ | -------------- | ----- |
+| `ExistingVpcId`        | String | `''`           | Existing VPC to export instead of creating one. |
+| `ExistingPublicSubnet1`| String | `''`           | Existing public subnet in the first AZ. |
+| `ExistingPublicSubnet2`| String | `''`           | Existing public subnet in a different AZ. |
 | `VpcCidr`              | String | `10.0.0.0/16`  | VPC CIDR. |
 | `PublicSubnet1Cidr`    | String | `10.0.1.0/24`  | First public subnet. |
 | `PublicSubnet2Cidr`    | String | `10.0.2.0/24`  | Second public subnet. |
+
+Supply all three `Existing*` parameters to create an export-only adapter stack.
+This is useful in customer accounts with an established landing zone or no
+remaining VPC quota. The subnets must belong to that VPC, have internet routes,
+and be in different availability zones.
 
 Outputs (all exported): `VpcId`, `PublicSubnet1`, `PublicSubnet2`,
 `SubnetIds` (comma-joined).
@@ -130,10 +138,12 @@ Outputs (all exported): `VpcId`, `PublicSubnet1`, `PublicSubnet2`,
 | `EnableOtel`               | String  | `false`                    | Set to `true` only after deploying an OTel collector. |
 | `LiteLLMMasterKey`         | String  | `''`                       | Optional `NoEcho` override; blank generates the key in Secrets Manager. |
 | `DBUsername`               | String  | `litellm`                  | RDS username. RDS generates the password in Secrets Manager. |
+| `DBMultiAz`                | String  | `true`                     | Keep `true` for production; `false` is suitable for a disposable walkthrough. |
 | `AwsRegion`                | String  | `us-east-1`                | Bedrock region for upstream calls. |
 | `MantleProjectId`          | String  | `default`                  | Mantle project allowed by the task role. |
 | `LiteLLMImage`             | String  | —                          | Required immutable ECR digest. |
 | `AllowedCidr`              | String  | `10.0.0.0/8`               | ALB ingress CIDR. **Never** `0.0.0.0/0`. |
+| `EnableTls`                | String  | `true`                     | Keep `true` outside a short-lived, CIDR-restricted walkthrough. |
 | `AlbCertificateArn`        | String  | `''`                       | Optional existing ACM certificate ARN. |
 | `AlbDomainName`            | String  | `''`                       | DNS name matching the managed or existing certificate. |
 | `Route53HostedZoneId`      | String  | `''`                       | Public zone used to create a managed certificate and ALB alias. |

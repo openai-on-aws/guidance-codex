@@ -181,6 +181,53 @@ class TestLiteLLMPreflight(unittest.TestCase):
             errors,
         )
 
+    def test_environment_accepts_cidr_restricted_http_walkthrough(self):
+        digest = "f" * 64
+        errors, warnings = preflight.check_environment(
+            {
+                "AWS_REGION": "us-east-1",
+                "BEDROCK_REGION": "us-east-1",
+                "ENABLE_TLS": "false",
+                "ALLOWED_CIDR": "203.0.113.4/32",
+                "LITELLM_BASE_IMAGE": (
+                    f"ghcr.io/berriai/litellm@sha256:{digest}"
+                ),
+                "LITELLM_IMAGE": (
+                    "123456789012.dkr.ecr.us-east-1.amazonaws.com/"
+                    f"codex-litellm@sha256:{digest}"
+                ),
+            },
+            "deploy",
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual(len(warnings), 1)
+
+    def test_http_walkthrough_rejects_dns_and_certificate_values(self):
+        digest = "1" * 64
+        errors, _ = preflight.check_environment(
+            {
+                "AWS_REGION": "us-east-1",
+                "BEDROCK_REGION": "us-east-1",
+                "ENABLE_TLS": "false",
+                "ALLOWED_CIDR": "203.0.113.4/32",
+                "GATEWAY_DOMAIN_NAME": "gateway.example.com",
+                "ROUTE53_HOSTED_ZONE_ID": "Z0123456789EXAMPLE",
+                "LITELLM_BASE_IMAGE": (
+                    f"ghcr.io/berriai/litellm@sha256:{digest}"
+                ),
+                "LITELLM_IMAGE": (
+                    "123456789012.dkr.ecr.us-east-1.amazonaws.com/"
+                    f"codex-litellm@sha256:{digest}"
+                ),
+            },
+            "deploy",
+        )
+        self.assertIn(
+            "GATEWAY_DOMAIN_NAME, ROUTE53_HOSTED_ZONE_ID, and "
+            "ALB_CERTIFICATE_ARN must be blank when ENABLE_TLS=false",
+            errors,
+        )
+
     def test_build_stage_does_not_require_deployment_values(self):
         digest = "c" * 64
         errors, warnings = preflight.check_environment(

@@ -87,15 +87,19 @@ def check_environment(
     errors = []
     warnings = []
     required = ["AWS_REGION", "LITELLM_BASE_IMAGE"]
+    enable_tls = environ.get("ENABLE_TLS", "true")
+    if enable_tls not in {"true", "false"}:
+        errors.append("ENABLE_TLS must be true or false")
     if stage == "deploy":
         required.extend(
             [
                 "BEDROCK_REGION",
                 "ALLOWED_CIDR",
-                "GATEWAY_DOMAIN_NAME",
                 "LITELLM_IMAGE",
             ]
         )
+        if enable_tls == "true":
+            required.append("GATEWAY_DOMAIN_NAME")
     for name in required:
         if not environ.get(name):
             errors.append(f"{name} is not set")
@@ -126,12 +130,27 @@ def check_environment(
     hosted_zone = (
         environ.get("ROUTE53_HOSTED_ZONE_ID", "") if stage == "deploy" else ""
     )
+    domain_name = environ.get("GATEWAY_DOMAIN_NAME", "")
     if hosted_zone and not HOSTED_ZONE_ID.fullmatch(hosted_zone):
         errors.append("ROUTE53_HOSTED_ZONE_ID is not a valid hosted zone ID")
-    if stage == "deploy" and not certificate and not hosted_zone:
+    if (
+        stage == "deploy"
+        and enable_tls == "true"
+        and not certificate
+        and not hosted_zone
+    ):
         errors.append(
             "Set ROUTE53_HOSTED_ZONE_ID for a managed certificate or "
             "ALB_CERTIFICATE_ARN for an existing certificate"
+        )
+    if stage == "deploy" and enable_tls == "false":
+        if certificate or hosted_zone or domain_name:
+            errors.append(
+                "GATEWAY_DOMAIN_NAME, ROUTE53_HOSTED_ZONE_ID, and "
+                "ALB_CERTIFICATE_ARN must be blank when ENABLE_TLS=false"
+            )
+        warnings.append(
+            "ENABLE_TLS=false is only for a short-lived, CIDR-restricted walkthrough"
         )
     return errors, warnings
 
@@ -256,7 +275,7 @@ def main() -> int:
         summary = "CLI v2, AWS identity, Docker, buildx, and base-image digest"
     else:
         summary = (
-            "CLI v2, AWS identity, environment, TLS, DNS, CIDR, "
+            "CLI v2, AWS identity, environment, transport, DNS, CIDR, "
             "and immutable deployment image"
         )
     print(f"LiteLLM {args.stage} preflight passed: {summary}.")

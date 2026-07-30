@@ -3,6 +3,8 @@
 The ECS template is a reference stack, not a complete landing zone. Production
 deployments should use an existing customer VPC, private ECS/RDS subnets, and
 the customer's DNS, certificate, alerting, logging, and security services.
+Production deployments must keep `EnableTls=true`; the raw HTTP walkthrough
+mode is not a production transport.
 
 ## Topology
 
@@ -22,6 +24,12 @@ Private ECS subnets need NAT egress or VPC endpoints for the AWS services used
 by the task plus approved HTTPS egress to the configured JWKS endpoint. Pass
 the ALB, task, and database subnet IDs separately; all must belong to the VPC
 exported by `NetworkingStackName`.
+
+When the customer already has a landing-zone VPC, deploy
+`deployment/infrastructure/networking.yaml` with `ExistingVpcId`,
+`ExistingPublicSubnet1`, and `ExistingPublicSubnet2`. This creates only the
+CloudFormation exports consumed by the gateway stack; it does not modify the
+customer VPC.
 
 ## Build Immutable Images
 
@@ -71,6 +79,8 @@ aws cloudformation deploy \
   --region "$AWS_REGION" \
   --parameter-overrides \
       NetworkingStackName="$NETWORKING_STACK" \
+      EnableTls=true \
+      DBMultiAz=true \
       AwsRegion="$BEDROCK_REGION" \
       MantleProjectId=default \
       LiteLLMImage="$LITELLM_IMAGE" \

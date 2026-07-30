@@ -16,3 +16,6 @@ __pycache__/
 
 # Local editorial working files
 /docs/BLOG_*.md
+
+# Local walkthrough screenshots, recordings, and browser traces
+/output/playwright/
