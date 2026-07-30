@@ -259,18 +259,19 @@ python3 -m unittest discover -s tests -v
   gateway lifting the namespaced LiteLLM metric keys). Needs `PyYAML` (in
   `tests/requirements.txt`).
 
-## Cost
+## Cost Inputs
 
 **Additional AWS costs compared to standard LiteLLM deployment:**
 
-| Service | Monthly Cost |
-|---------|-------------|
-| DynamoDB table | ~$1-5 (pay-per-request) |
-| ECS task (JWT middleware) | ~$5 (+0.25 vCPU, +512MB) |
-| ECR storage | ~$0.01 (+100MB) |
-| **Total** | **~$6-10/month** |
+| Service | Estimate using |
+|---------|----------------|
+| DynamoDB table | Request volume, item size, backups, and region |
+| ECS task (JWT middleware) | Requested CPU/memory, task count, and region |
+| ECR storage | Image size, retention, and data transfer |
 
-**vs. LiteLLM Enterprise:** ~$500-2000+/month
+Use the AWS Pricing Calculator for the selected customer topology. For
+licensed LiteLLM features, use current vendor pricing and contract terms; do
+not copy a point-in-time quote into the architecture decision.
 
 ## Monitoring
 
@@ -366,18 +367,21 @@ aws iam list-attached-role-policies --role-name <task-role-name>
 5. **Key Rotation**: Keys have 90-day TTL, auto-cleanup via DynamoDB TTL
 6. **Audit Trail**: All key creation logged to CloudWatch
 
-## Comparison: Custom Middleware vs LiteLLM Enterprise
+## Comparison: Custom Middleware vs Licensed LiteLLM Features
 
-| Feature | Custom Middleware | LiteLLM Enterprise |
+Vendor packaging changes. Confirm every licensed capability and support term
+against the current LiteLLM documentation and customer contract.
+
+| Feature | Custom Middleware | Licensed offering to verify |
 |---------|-------------------|-------------------|
-| **Cost** | ~$6-10/month | ~$500-2000+/month |
-| **Setup Time** | ~1 day | ~1 day |
+| **Cost** | Customer AWS infrastructure and operations | Current vendor quote plus AWS costs |
+| **Implementation** | Customer-owned integration | Validate onboarding scope |
 | **Maintenance** | Self-managed | Vendor-supported |
-| **OIDC/SSO** | ✅ Basic | ✅ Advanced (roles, RBAC) |
-| **Key Management** | ✅ Auto-generation | ✅ Advanced policies |
-| **Audit Logging** | ✅ CloudWatch | ✅ Advanced audit trail |
-| **Rate Limiting** | ❌ (use LiteLLM OSS) | ✅ Per-user/team |
-| **Model Routing** | ❌ (use LiteLLM OSS) | ✅ Advanced routing |
+| **OIDC/SSO** | Included issuer, audience, and claim validation | Verify roles and RBAC |
+| **Key Management** | Included auto-generation | Verify policy controls |
+| **Audit Logging** | CloudWatch integration | Verify audit scope and retention |
+| **Rate Limiting** | Use configured LiteLLM capabilities | Verify user/team controls |
+| **Model Routing** | Use configured LiteLLM capabilities | Verify routing features |
 | **Support** | Self-support | Enterprise support |
 
 ## Future Enhancements

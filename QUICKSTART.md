@@ -1,8 +1,10 @@
 # Guidance for Codex on Amazon Bedrock
 
-Run [OpenAI Codex](https://developers.openai.com/codex/overview) against [Amazon Bedrock](https://aws.amazon.com/bedrock/) with enterprise-grade identity, optional quota enforcement, and optional observability.
+Connect [OpenAI Codex](https://developers.openai.com/codex/overview) to models on [Amazon Bedrock](https://aws.amazon.com/bedrock/) with enterprise identity, optional quota enforcement, and optional observability.
 
-This guidance provides three deployment patterns — choose the one that matches your organization's needs for ops effort and budget enforcement.
+Codex remains on developer workstations. This guidance deploys or configures
+the access plane. Choose the path that matches your organization's operations
+and governance requirements.
 
 ---
 
@@ -50,7 +52,7 @@ Question 1: Do you need HARD quota enforcement?
 
 ## Pattern Comparison
 
-| Capability | Native AWS Access | AgentCore Gateway | LLM Gateway |
+| Capability | Native AWS Access | AgentCore Gateway | LiteLLM Gateway |
 |------------|-------------------|-------------------|-------------|
 | **Authentication** | SAML → IdC | OIDC bearer → Gateway (`CUSTOM_JWT`) | OIDC → Gateway |
 | **IAM Identity Center Required?** | ✅ Yes | ❌ No | ❌ No |
@@ -64,17 +66,13 @@ Question 1: Do you need HARD quota enforcement?
 | **Model Routing/Fallback** | ❌ No | ✅ Multi-provider (Bedrock/OpenAI/Anthropic) | ✅ Provided by gateway |
 | **Content Guardrails** | ❌ No | ✅ Bedrock Guardrails + Policy | ❌ No |
 | **AWS-managed web search** | ❌ No | ✅ MCP tool | ❌ No |
-| **Setup Time** | 5-60 min | ~10 min | 15 min |
+| **Operational ownership** | AWS identity configuration | AWS managed | Customer-operated ECS, RDS, and ALB |
 
-> **Quota enforcement is gateway-native, not extra AWS infrastructure.**
-> Hard budgets, per-user / per-team quotas, and RPM/TPM rate limits are
-> first-class features of every modern OpenAI-compatible gateway —
-> [LiteLLM](https://docs.litellm.ai/docs/proxy/users),
-> [Portkey](https://portkey.ai/docs/product/ai-gateway/budget-limits),
-> [Kong AI Gateway](https://docs.konghq.com/hub/kong-inc/ai-rate-limiting-advanced/),
-> and others all expose them via their admin APIs. You configure quotas
-> against the gateway you deploy; you do **not** need a separate AWS
-> Lambda or DynamoDB table for them. See
+> **Quota enforcement is a gateway capability.**
+> LiteLLM documents hard budgets, per-user/per-team policy, and RPM/TPM rate
+> limits. Other products differ by version and tier, so verify the exact
+> contract before selection. You configure LiteLLM quotas in the gateway; you
+> do **not** need a separate AWS Lambda for budget enforcement. See
 > [`docs/QUICKSTART_LLM_GATEWAY.md`](docs/QUICKSTART_LLM_GATEWAY.md#quota-enforcement)
 > for concrete examples.
 >
@@ -174,9 +172,20 @@ Corporate IdP (Okta/Azure) → OIDC/JWT → LLM Gateway → Bedrock
 
 ### Gateway Choices
 
-Any OpenAI-compatible gateway works — **[LiteLLM](https://www.litellm.ai/)**, **[Portkey](https://portkey.ai/)**, **[Bifrost](https://github.com/maximhq/bifrost)**, **[Kong AI Gateway](https://konghq.com/products/kong-ai-gateway)**, **[Helicone](https://helicone.ai/)**, or a custom FastAPI shim. Choose whichever matches your operational posture.
+Candidate gateways include **[LiteLLM](https://www.litellm.ai/)**,
+**[Portkey](https://portkey.ai/)**, **[Bifrost](https://github.com/maximhq/bifrost)**,
+**[Kong AI Gateway](https://konghq.com/products/kong-ai-gateway)**,
+**[Helicone](https://helicone.ai/)**, and custom implementations. A candidate
+is suitable only after it passes the Responses, identity, policy, and
+operational gates in
+[Enterprise Gateway Guidance](docs/ENTERPRISE_GATEWAY_GUIDANCE.md).
 
 This repository ships **LiteLLM** as a reference implementation under `deployment/litellm/` — deployed on ECS Fargate via the CloudFormation templates in `deployment/litellm/ecs/`. If you bring your own gateway, deploy only the auth/networking stacks and point developers at your gateway URL.
+
+LiteLLM is the primary enterprise walkthrough because it makes central
+identity, budgets, rate limits, routing, and customer-operated infrastructure
+concrete. This reflects field conversations, not a universal recommendation.
+Use Native AWS Access when hard controls are unnecessary.
 
 ### What Gets Deployed (Reference Implementation)
 
@@ -206,8 +215,6 @@ When you deploy the LiteLLM reference stacks:
 | **Developer Workflow** | Change from `aws sso login` to API key |
 | **Codex Config** | Change `model_provider` from `amazon-bedrock` to custom provider name (e.g., `litellm-gateway`) |
 | **Bedrock CloudTrail / CUR** | Attribution changes from per-user to gateway IAM role; per-user reporting moves to gateway telemetry |
-
-**Migration time:** 2-4 hours infrastructure + 1 hour per 10 developers for reconfiguration
 
 **Best practice:** Test with pilot group (5-10 users) before org-wide rollout
 
@@ -241,6 +248,7 @@ with `aws bedrock list-foundation-models --region <region>`.
 ### Architecture & Deployment
 - **[docs/01-decide.md](docs/01-decide.md)** — Detailed pattern comparison
 - **[docs/deploy-identity-center.md](docs/deploy-identity-center.md)** — Native AWS Access technical guide
+- **[docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md)** — Staging, promotion, and rollback guidance
 
 ### Operations
 - **[docs/operate-monitoring.md](docs/operate-monitoring.md)** — Monitoring and cost attribution
@@ -259,7 +267,10 @@ with `aws bedrock list-foundation-models --region <region>`.
 
 ## Quick Setup with CloudFormation
 
-Both patterns deploy directly with the AWS CLI against the templates under `deployment/infrastructure/` and `deployment/litellm/ecs/`. Follow the pattern-specific guide for end-to-end steps; the snippets below show the core commands.
+The infrastructure-backed paths use the AWS CLI with templates under
+`deployment/infrastructure/` and `deployment/litellm/ecs/`. Follow the
+path-specific guide for the complete sequence; the snippets below show the
+core commands.
 
 ### Native AWS Access
 

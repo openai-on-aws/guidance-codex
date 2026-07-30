@@ -11,3 +11,6 @@ deployment/templates/otel-local-config-*.yaml
 # Python test artifacts (jwt-middleware unit tests)
 __pycache__/
 *.pyc
+
+# Local editorial working files
+/docs/BLOG_*.md

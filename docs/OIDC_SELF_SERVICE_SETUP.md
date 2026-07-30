@@ -321,20 +321,23 @@ aws logs tail /ecs/litellm --follow --region us-west-2 --filter-pattern "jwt-mid
 
 ---
 
-## Alternative: Upgrade to LiteLLM Enterprise
+## Alternative: Evaluate Licensed LiteLLM Features
 
-If you need advanced features not in custom middleware:
+If you need vendor-supported identity or policy features not in the custom
+middleware, compare the current product tier and contract. Packaging changes,
+so treat this table as evaluation criteria rather than an entitlement claim:
 
-| Feature | Custom JWT Middleware | LiteLLM Enterprise |
+| Feature | Custom JWT Middleware | Licensed offering to verify |
 |---------|----------------------|-------------------|
-| **Setup** | 1-2 hours | 1 hour |
-| **OIDC/SSO** | ✅ Basic | ✅ Advanced (roles, RBAC) |
-| **Key Management** | ✅ Auto-generation | ✅ Advanced policies |
-| **Rate Limiting** | Use LiteLLM OSS features | ✅ Per-user/team |
-| **Model Routing** | Use LiteLLM OSS features | ✅ Advanced routing |
+| **Implementation** | Customer-owned integration | Verify vendor onboarding scope |
+| **OIDC/SSO** | Included issuer, audience, and claim validation | Verify roles and RBAC |
+| **Key Management** | Included auto-generation | Verify policy controls |
+| **Rate Limiting** | Use configured LiteLLM capabilities | Verify user/team controls |
+| **Model Routing** | Use configured LiteLLM capabilities | Verify routing features |
 | **Support** | Self-support | Enterprise support |
 
-**Recommendation:** Start with custom middleware, upgrade to Enterprise later if you need vendor support or advanced RBAC.
+Choose only after validating the same issuer, audience, key-rotation,
+deprovisioning, readiness, and audit requirements.
 
 ---
 

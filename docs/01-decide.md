@@ -30,8 +30,8 @@ priorities on the two axes that matter: *managed-vs-self-run ops* and
 | **Model Routing/Fallback** | ❌ No | ✅ Multi-provider (Bedrock/OpenAI/Anthropic) | ✅ Yes |
 | **Content Guardrails** | ❌ No | ✅ Bedrock Guardrails + Policy | ❌ No |
 | **AWS-managed web search (MCP tool)** | ❌ No | ✅ Yes ([guide](QUICKSTART_AGENTCORE_GATEWAY.md#optional-aws-managed-web-search-mcp-tool)) | ❌ No |
-| **Setup Time** | 5-60 min | ~10 min (2 API calls + IAM role) | 15 min + build/harden |
-| **Infra Cost** | Free (AWS control plane) | Pay-per-use (managed) | ~$100-150/mo |
+| **Operational ownership** | AWS identity configuration | AWS managed | Customer-operated ECS, RDS, and ALB |
+| **Cost model** | AWS identity and model usage | Managed service and model usage | Infrastructure, operations, and model usage |
 
 > Model availability is region-bound — `gpt-5.5` (us-east-1 / us-east-2), `gpt-5.4`
 > also in us-west-2; the AgentCore web search connector is us-east-1 only. See
@@ -72,8 +72,9 @@ enforcement. All of the following must apply:
       budgets with automatic cutoff behind a single endpoint; reuse of an existing
       platform-team gateway.
 - [ ] You have a container runtime you can operate (ECS Fargate, EKS, or
-      equivalent) plus ALB and Postgres. Reference LiteLLM footprint is
-      ~$90–150/mo + 0.1–0.25 FTE of ongoing ops.
+      equivalent) plus ALB and Postgres. Estimate the selected region,
+      topology, retention, and traffic with the AWS Pricing Calculator, and
+      name an operational owner.
 - [ ] You have an OIDC IdP that can issue JWTs to developer machines (for
       client → gateway auth).
 - [ ] You accept Codex running through a custom gateway provider (for example
@@ -139,7 +140,8 @@ Canonical deploy doc: [QUICKSTART_AGENTCORE_GATEWAY.md](QUICKSTART_AGENTCORE_GAT
 
 - Pointing Codex at a gateway requires a custom provider definition with a custom
   `base_url`, bypassing the native `amazon-bedrock` code path.
-- Gateway adds operational overhead (~$100-150/mo + 0.1-0.25 FTE).
+- Gateway adds infrastructure and operational ownership; quantify both for the
+  customer's topology instead of using a fixed estimate.
 - Bedrock CloudTrail and CUR no longer identify end users on the gateway path;
   use gateway-native telemetry and spend logs for per-user reporting.
 

@@ -1,6 +1,7 @@
 # Quick Start: Native AWS Access
 
-Deploy Codex on Bedrock with IAM Identity Center authentication in 5-60 minutes using direct CloudFormation deployment.
+Connect Codex to models on Bedrock with IAM Identity Center authentication
+using the repository's CloudFormation baseline.
 
 **Use this pattern if:**
 - You already use AWS IAM Identity Center, OR

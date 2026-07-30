@@ -1,6 +1,7 @@
 # Quick Start: LLM Gateway Pattern
 
-Deploy Codex on Bedrock with an OpenAI-compatible LLM gateway for hard quota enforcement, rate limiting, and centralized policy control.
+Connect Codex to models on Bedrock through a Responses-compatible LLM gateway
+for hard quota enforcement, rate limiting, and centralized policy control.
 
 **Use this pattern if:**
 - You need hard per-user/per-team budget limits (request blocking)
@@ -32,25 +33,29 @@ Corporate IdP (Okta/Azure) → OIDC/JWT → LLM Gateway → Amazon Bedrock
 
 ## Choose Your Gateway
 
-Any OpenAI-compatible gateway that can call Amazon Bedrock will work. Choose the one that matches your operational posture:
+Start with the gateway whose documented and tested contract matches your
+operational posture. Bedrock support by itself is not sufficient; the gateway
+must preserve the Responses API behavior listed below.
 
-### AWS-Maintained Reference Implementation
+### Repository Reference Implementation
 
 | Gateway | Implementation Guide | Best For |
 |---------|---------------------|----------|
-| **LiteLLM** | [QUICKSTART_LLM_GATEWAY_LITELLM.md](QUICKSTART_LLM_GATEWAY_LITELLM.md) | Organizations new to LLM gateways, learning CloudFormation deployment patterns |
+| **LiteLLM** | [QUICKSTART_LLM_GATEWAY_LITELLM.md](QUICKSTART_LLM_GATEWAY_LITELLM.md) | Primary enterprise walkthrough for centralized controls |
 | **LiteLLM or Portkey enterprise evaluation** | [ENTERPRISE_GATEWAY_GUIDANCE.md](ENTERPRISE_GATEWAY_GUIDANCE.md) | Platform teams comparing controls, deployment models, and contract evidence |
 
 **Deployment:** ECS Fargate + Amazon RDS for PostgreSQL  
 **Features:** Budget limits, RPM/TPM limits, model routing, team quotas, admin API  
-**Setup time:** 15-20 minutes  
 **Status:** Hardened reference baseline; customer landing-zone and operational validation still required
 
 ---
 
 ### Other Gateway Options
 
-Any OpenAI-compatible gateway that integrates with Amazon Bedrock can be used with this guidance. The gateway must meet the minimum requirements listed in the [Gateway Requirements](#gateway-requirements) section below.
+Any Responses-compatible gateway that integrates with the intended Amazon
+Bedrock API can be evaluated with this guidance. It is supported by this
+repository only after it meets the [Gateway Requirements](#gateway-requirements)
+and passes the executable contract probe.
 
 Use the [Enterprise Gateway Guidance](ENTERPRISE_GATEWAY_GUIDANCE.md) for the
 LiteLLM/Portkey compatibility matrix, test gate, and customer control checklist.
@@ -62,18 +67,21 @@ LiteLLM/Portkey compatibility matrix, test gate, and customer control checklist.
 Any gateway must meet these minimum requirements:
 
 ### Technical Requirements
-- ✅ **OpenAI API compatibility** — implements `/v1/responses` for Codex and GPT-5.x workloads (optionally `/v1/chat/completions` for chat-style aliases)
-- ✅ **Responses field fidelity** — preserves Codex/OpenAI request fields such as `reasoning.effort`, `text.verbosity`, `prompt_cache_key`, `previous_response_id`, and `phase` instead of silently dropping them
-- ✅ **Bedrock integration** — can call Amazon Bedrock APIs (requires IAM role)
-- ✅ **Gateway-managed upstream auth** — if proxying Bedrock Mantle, refreshes upstream bearer tokens inside the gateway rather than depending on a manually rotated static 12-hour token
-- ✅ **Authentication** — supports API keys or JWT/OIDC tokens
-- ✅ **AWS deployment** — runs on ECS, EKS, EC2, Lambda, or hybrid
+- **Responses compatibility** — implements `/v1/responses`, including streaming
+- **Responses field fidelity** — preserves `reasoning.effort`,
+  `text.verbosity`, `prompt_cache_key`, `previous_response_id`, and `phase`
+  instead of silently dropping them
+- **Bedrock integration** — can call the exact Bedrock API selected for the route
+- **Gateway-managed upstream auth** — refreshes Bedrock Mantle bearer tokens
+  inside the gateway instead of depending on a manually rotated static token
+- **Authentication** — supports API keys or JWT/OIDC tokens
+- **AWS deployment** — has an approved managed, self-hosted, or hybrid data path
 
-### Operational Requirements (Recommended)
-- ✅ **Quota enforcement** — per-user or per-team budget limits with automatic blocking
-- ✅ **Rate limiting** — RPM and TPM controls
-- ✅ **Admin API** — programmatic key generation and quota management
-- ✅ **Telemetry** — metrics, logs, or traces for observability
+### Operational Requirements
+- **Quota enforcement** — per-user or per-team budget limits with automatic blocking
+- **Rate limiting** — RPM and TPM controls
+- **Admin API** — programmatic key generation and quota management
+- **Telemetry** — metrics, logs, or traces for observability
 
 ---
 

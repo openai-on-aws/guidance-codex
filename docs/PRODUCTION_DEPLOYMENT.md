@@ -58,6 +58,12 @@ Use AWS CLI v2. Run local tests and `cfn-lint` before creating a CloudFormation
 change set.
 
 ```bash
+python3 deployment/scripts/preflight-litellm.py \
+  --stage deploy \
+  --check-ecr-image
+```
+
+```bash
 aws cloudformation deploy \
   --stack-name codex-gateway-staging \
   --template-file deployment/litellm/ecs/litellm-ecs.yaml \

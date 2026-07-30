@@ -1,10 +1,10 @@
 # Guidance for Codex on AWS
 
-Production-ready deployment patterns for running [OpenAI Codex](https://developers.openai.com/codex/overview) at enterprise scale on [Amazon Bedrock](https://aws.amazon.com/bedrock/) — with corporate SSO, optional quota enforcement, and observability built in.
+Reference access patterns for connecting [OpenAI Codex](https://developers.openai.com/codex/overview) to models on [Amazon Bedrock](https://aws.amazon.com/bedrock/), with corporate SSO, optional quota enforcement, and observability.
 
 ---
 
-## Three Deployment Patterns
+## Three Access Patterns
 
 ```text
 Need hard quota enforcement? (Block requests when limits hit)
@@ -23,29 +23,32 @@ Need hard quota enforcement? (Block requests when limits hit)
                     └── NO → Native AWS Access (set up IdC) OR AgentCore Gateway
 ```
 
-| Pattern | Setup Time | Telemetry | Best For |
+| Pattern | Operations | Telemetry | Best For |
 |---------|------------|-----------|----------|
-| **[Native AWS Access](docs/QUICKSTART_NATIVE_AWS_ACCESS.md)** | 5–60 min | Optional Codex-side OTel | Teams with IdC, native per-user attribution, soft monitoring OK |
-| **[AgentCore Gateway](docs/QUICKSTART_AGENTCORE_GATEWAY.md)** | ~10 min | CloudWatch `AWS/BedrockMantle` | Managed gateway, guardrails, AWS-private web search, minimal ops |
-| **[LLM Gateway](docs/QUICKSTART_LLM_GATEWAY.md)** | 15 min | Provided by the gateway | Hard budgets, rate limiting, per-user spend |
+| **[Native AWS Access](docs/QUICKSTART_NATIVE_AWS_ACCESS.md)** | Lowest | Optional Codex-side OTel | Teams with IdC, native per-user attribution, soft monitoring OK |
+| **[AgentCore Gateway](docs/QUICKSTART_AGENTCORE_GATEWAY.md)** | AWS managed | CloudWatch `AWS/BedrockMantle` | Managed gateway, guardrails, AWS-private web search |
+| **[LiteLLM Gateway](docs/QUICKSTART_LLM_GATEWAY_LITELLM.md)** | Customer operated | Gateway telemetry | Hard budgets, rate limiting, centralized policy |
 
 All patterns include:
 - Corporate SSO (Okta, Azure AD, Auth0, AWS IAM Identity Center)
 - Per-user CloudTrail audit trails (Native AWS Access; gateway patterns attribute via gateway telemetry)
 - One-command authentication
 - Cross-platform support (Windows, macOS, Linux)
-- CloudFormation templates for one-command infrastructure deployment
+- Infrastructure templates and deployment guidance for each path
 
 ## Quick Start
 
 - **Overview & decision guide** → [QUICKSTART.md](QUICKSTART.md)
 - **Native AWS Access** → [Quickstart](docs/QUICKSTART_NATIVE_AWS_ACCESS.md)
 - **AgentCore Gateway** → [Quickstart](docs/QUICKSTART_AGENTCORE_GATEWAY.md)
-- **LLM Gateway** → [Quickstart](docs/QUICKSTART_LLM_GATEWAY.md)
+- **LiteLLM Gateway** → [Primary enterprise walkthrough](docs/QUICKSTART_LLM_GATEWAY_LITELLM.md)
+- **Other LLM gateways** → [Pattern requirements](docs/QUICKSTART_LLM_GATEWAY.md)
 
 ## Documentation
 
 - [Architecture & pattern comparison](docs/01-decide.md)
+- [Enterprise gateway evaluation](docs/ENTERPRISE_GATEWAY_GUIDANCE.md)
+- [Production deployment gates](docs/PRODUCTION_DEPLOYMENT.md)
 - [Monitoring & operations](docs/operate-monitoring.md)
 - [Troubleshooting](docs/operate-troubleshooting.md)
 - [CHANGELOG](CHANGELOG.md)

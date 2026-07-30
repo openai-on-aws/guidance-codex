@@ -1,10 +1,12 @@
 # Quick Start: LiteLLM Gateway on AWS
 
-> **Status:** Reference Implementation  
+> **Status:** Hardened reference baseline
 > **Audience:** Organizations evaluating LLM gateway patterns, learning CloudFormation deployment  
-> **Production Readiness:** Requires security hardening before production use (see [Security Considerations](#security-considerations))
+> **Production Readiness:** Requires customer landing-zone validation and recorded production evidence (see [Security Considerations](#security-considerations))
 
-Deploy LiteLLM gateway on ECS Fargate for OpenAI Codex with Amazon Bedrock backend. This is the AWS-maintained reference implementation of the [LLM Gateway pattern](QUICKSTART_LLM_GATEWAY.md).
+Deploy a LiteLLM gateway on ECS Fargate and connect Codex to an Amazon Bedrock
+backend. This is the repository's primary enterprise implementation of the
+[LLM Gateway pattern](QUICKSTART_LLM_GATEWAY.md).
 
 **Features:**
 - Per-user and per-team budget limits (`max_budget`, `budget_duration`)
@@ -43,12 +45,16 @@ export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output tex
 export ECR_REGISTRY="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
 export ALB_CERTIFICATE_ARN=arn:aws:acm:us-east-1:123456789012:certificate/replace-me
 export ALLOWED_CIDR="$(curl -Ls https://checkip.amazonaws.com)/32"
+export LITELLM_BASE_IMAGE=ghcr.io/berriai/litellm@sha256:<reviewed-digest>
 
 # Optional but recommended for trusted HTTPS.
 # If you omit this, the stack returns the ALB DNS name and you'll need `curl -k`
 # for low-level smoke tests because the ACM certificate will not match the ALB hostname.
 # Codex itself should use a cert-matching hostname, not the raw ALB DNS name.
 export GATEWAY_DOMAIN_NAME=gateway.example.com
+
+# Read-only checks before building.
+python3 deployment/scripts/preflight-litellm.py --stage build
 ```
 
 ### Step 2: Build and Push LiteLLM Image
@@ -66,8 +72,7 @@ aws ecr create-repository \
 aws ecr get-login-password --region "$AWS_REGION" \
   | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
-# Build and push. Resolve and review the upstream digest before this step.
-export LITELLM_BASE_IMAGE=ghcr.io/berriai/litellm@sha256:<reviewed-digest>
+# Build and push. The upstream digest was resolved and reviewed in Step 1.
 export LITELLM_IMAGE_TAG=v1
 export LITELLM_IMAGE_TAGGED="$ECR_REGISTRY/$LITELLM_REPO:$LITELLM_IMAGE_TAG"
 
@@ -103,6 +108,11 @@ export LITELLM_IMAGE_DIGEST=$(aws ecr describe-images \
   --query 'imageDetails[0].imageDigest' \
   --output text)
 export LITELLM_IMAGE="$ECR_REGISTRY/$LITELLM_REPO@$LITELLM_IMAGE_DIGEST"
+
+# Read-only checks before creating or updating stacks.
+python3 deployment/scripts/preflight-litellm.py \
+  --stage deploy \
+  --check-ecr-image
 ```
 
 ### Step 3: Deploy Networking
@@ -261,6 +271,21 @@ codex exec "Create a hello world function in Python"
 
 # Expected: Codex returns Python code, no auth/connection errors
 ```
+
+Before promotion, run the gateway contract probe with a synthetic identity:
+
+```bash
+export GATEWAY_BASE_URL="$GATEWAY_URL"
+export GATEWAY_API_KEY="$USER_API_KEY"
+export GATEWAY_MODEL=gpt-5.5
+
+python3 deployment/scripts/validate-responses-contract.py \
+  --include-tool-call
+```
+
+This validates Responses fields, continuation, SSE streaming, and a function
+tool call. It is a contract check, not a substitute for load, policy, rollback,
+and restore tests.
 
 ---
 

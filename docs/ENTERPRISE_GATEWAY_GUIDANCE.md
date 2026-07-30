@@ -25,29 +25,31 @@ export GATEWAY_BASE_URL=https://gateway.example.com/v1
 export GATEWAY_API_KEY=<test-identity-key>
 export GATEWAY_MODEL=gpt-5.5
 
-python3 deployment/scripts/validate-responses-contract.py
+python3 deployment/scripts/validate-responses-contract.py \
+  --include-tool-call
 ```
 
-Passing this probe is necessary but not sufficient. A production evaluation
-must also test streaming, tool calls, cancellation, long-running requests,
-rate-limit responses, identity attribution, and the customer's retention
-policy.
+The default probe tests SSE streaming; `--include-tool-call` adds a function
+tool-call requirement. Passing it is necessary but not sufficient. A
+production evaluation must also test cancellation, long-running requests,
+rate-limit responses, identity attribution, load, rollback, restore, and the
+customer's retention policy.
 
 ## Compatibility Matrix
 
 | Capability | LiteLLM reference | Portkey evaluation |
 |------------|-------------------|--------------------|
-| Responses endpoint | Configured and tested by this repository | Documented by Portkey; run the repository probe |
+| Responses endpoint | Configured; local tests cover the probe, live gateway evidence pending | Documented by Portkey; run the repository probe |
 | Bedrock Mantle GPT-5.x | Configured with `bedrock_mantle/` and server-side token refresh | Not verified by this repository; do not infer Mantle support from classic Bedrock support |
 | Classic Bedrock assumed role | ECS task role | Documented Portkey integration pattern |
-| OIDC/JWT | Included middleware or LiteLLM Enterprise | Use Portkey's workspace/service-account controls and verify the selected deployment tier |
-| Per-user/team budgets | LiteLLM budgets and rate limits | Portkey budgets, rate limits, and virtual keys |
+| OIDC/JWT | Included middleware; compare licensed LiteLLM features against current vendor terms | Verify Portkey workspace/service-account controls for the selected tier |
+| Per-user/team budgets | Vendor documented; prove blocking with customer policy | Vendor documented; prove blocking with customer policy |
 | Customer-operated data plane | ECS reference stack | Evaluate Portkey hybrid deployment and support terms |
 | Promotion gate | CI plus Responses contract probe | Same probe, plus vendor-specific integration tests |
 
 `Documented` means the vendor describes the feature. `Verified` means this
 repository has an executable path for it. Keep that distinction in customer
-architecture documents and in any derived blog post.
+architecture documents and in any derived guidance.
 
 ## LiteLLM Path
 
@@ -100,8 +102,8 @@ evidence that Bedrock Mantle's Responses endpoint is supported. Require Portkey
 to identify the exact upstream API, IAM actions, region, model identifier,
 credential refresh behavior, and data path in the customer design.
 
-A header-based Portkey evaluation can use Codex custom-provider environment
-headers:
+A header-based Portkey evaluation can use Codex custom-provider
+environment-backed headers:
 
 ```toml
 model = "<portkey-model-alias>"
@@ -120,6 +122,21 @@ env_http_headers = {
 Confirm the endpoint and required headers against the customer's Portkey
 workspace before distribution. Keep both values in the operating-system secret
 store or an approved credential helper, not in `config.toml`.
+
+The repository probe accepts the same secret headers without putting their
+values in command-line arguments:
+
+```bash
+export GATEWAY_BASE_URL=https://api.portkey.ai/v1
+export GATEWAY_API_KEY=<test-bearer-key>
+export PORTKEY_API_KEY=<secret>
+export PORTKEY_VIRTUAL_KEY=<secret>
+
+python3 deployment/scripts/validate-responses-contract.py \
+  --header-env x-portkey-api-key=PORTKEY_API_KEY \
+  --header-env x-portkey-virtual-key=PORTKEY_VIRTUAL_KEY \
+  --include-tool-call
+```
 
 Do not mark the Portkey route production-ready until the contract probe passes
 with the intended Bedrock GPT-5.x model and the following evidence is captured:

@@ -33,11 +33,15 @@ jobs:
             "cfn-lint>=1.40,<2"
 
       - name: Run Python tests
-        run: >-
-          python -m unittest discover
-          -s deployment/litellm/jwt-middleware/tests
-          -p "test_*.py"
-          -v
+        run: |
+          python -m unittest discover \
+            -s deployment/litellm/jwt-middleware/tests \
+            -p "test_*.py" \
+            -v
+          python -m unittest discover \
+            -s deployment/scripts/tests \
+            -p "test_*.py" \
+            -v
 
       - name: Compile Python sources
         run: python -m compileall -q deployment
@@ -55,6 +59,9 @@ jobs:
           for script in deployment/scripts/*.sh deployment/scripts/codex-sso-creds; do
             bash -n "$script"
           done
+
+      - name: Validate local documentation links
+        run: python deployment/scripts/validate-doc-links.py
 
       - name: Reject mutable production image references
         run: |
