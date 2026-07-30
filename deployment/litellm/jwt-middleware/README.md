@@ -63,8 +63,8 @@ the JWT-middleware-specific steps below extract the OIDC path. Set
 | Value | Description |
 |-------|-------------|
 | JWKS URL | `https://your-tenant.okta.com/.well-known/jwks.json` |
-| JWT Audience | Client ID (optional — empty disables audience validation) |
-| JWT Issuer | Issuer URL (optional — empty disables issuer validation) |
+| JWT Audience | Client ID (required) |
+| JWT Issuer | Issuer URL (required) |
 
 These map directly to the `JwksUrl`, `JwtAudience`, and `JwtIssuer` parameters
 on `deployment/litellm/ecs/litellm-ecs.yaml`.
@@ -74,7 +74,7 @@ on `deployment/litellm/ecs/litellm-ecs.yaml`.
 ```bash
 export JWT_REPO=codex-jwt-middleware
 export JWT_IMAGE_TAG=v1
-export JWT_IMAGE="$ECR_REGISTRY/$JWT_REPO:$JWT_IMAGE_TAG"
+export JWT_IMAGE_TAGGED="$ECR_REGISTRY/$JWT_REPO:$JWT_IMAGE_TAG"
 
 aws ecr create-repository \
   --repository-name "$JWT_REPO" \
@@ -84,15 +84,23 @@ aws ecr create-repository \
 
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  --tag "$JWT_IMAGE" \
+  --tag "$JWT_IMAGE_TAGGED" \
   --file deployment/litellm/jwt-middleware/Dockerfile \
   --push \
   deployment/litellm/jwt-middleware
+
+export JWT_IMAGE_DIGEST=$(aws ecr describe-images \
+  --repository-name "$JWT_REPO" \
+  --image-ids imageTag="$JWT_IMAGE_TAG" \
+  --region "$AWS_REGION" \
+  --query 'imageDetails[0].imageDigest' \
+  --output text)
+export JWT_IMAGE="$ECR_REGISTRY/$JWT_REPO@$JWT_IMAGE_DIGEST"
 ```
 
 ### Step 3: Build and push the LiteLLM image
 
-Follow Step 2 of [`QUICKSTART_LLM_GATEWAY.md`](../../../docs/QUICKSTART_LLM_GATEWAY.md#step-2-build-and-push-the-litellm-image)
+Follow Step 2 of [`QUICKSTART_LLM_GATEWAY_LITELLM.md`](../../../docs/QUICKSTART_LLM_GATEWAY_LITELLM.md#step-2-build-and-push-litellm-image)
 to build and push `$LITELLM_IMAGE`.
 
 ### Step 4: Deploy the user-key-mapping DynamoDB stack
@@ -114,7 +122,6 @@ Deploy the networking stack first if not already in place
 ```bash
 export GATEWAY_STACK=codex-litellm-gateway
 export LITELLM_MASTER_KEY="sk-litellm-$(openssl rand -hex 24)"
-export DB_PASSWORD="$(openssl rand -base64 24 | tr -d '/+=')"
 
 aws cloudformation deploy \
   --stack-name "$GATEWAY_STACK" \
@@ -125,7 +132,6 @@ aws cloudformation deploy \
       NetworkingStackName=codex-networking \
       LiteLLMMasterKey="$LITELLM_MASTER_KEY" \
       DBUsername=litellm \
-      DBPassword="$DB_PASSWORD" \
       AwsRegion="$BEDROCK_REGION" \
       LiteLLMImage="$LITELLM_IMAGE" \
       AlbCertificateArn="$ALB_CERTIFICATE_ARN" \

@@ -1,0 +1,64 @@
+name: Validate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            deployment/litellm/jwt-middleware/requirements.txt
+            deployment/litellm/jwt-middleware/tests/requirements.txt
+
+      - name: Install validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            -r deployment/litellm/jwt-middleware/requirements.txt \
+            -r deployment/litellm/jwt-middleware/tests/requirements.txt \
+            "cfn-lint>=1.40,<2"
+
+      - name: Run Python tests
+        run: >-
+          python -m unittest discover
+          -s deployment/litellm/jwt-middleware/tests
+          -p "test_*.py"
+          -v
+
+      - name: Compile Python sources
+        run: python -m compileall -q deployment
+
+      - name: Validate gateway CloudFormation
+        run: >-
+          cfn-lint
+          deployment/infrastructure/bedrock-auth-idc.yaml
+          deployment/litellm/ecs/litellm-ecs.yaml
+          deployment/litellm/ecs/user-key-mapping.yaml
+          --ignore-checks W6001
+
+      - name: Validate shell syntax
+        run: |
+          for script in deployment/scripts/*.sh deployment/scripts/codex-sso-creds; do
+            bash -n "$script"
+          done
+
+      - name: Reject mutable production image references
+        run: |
+          if grep -R --line-number -E 'Image:.*:(latest|main-latest)([[:space:]]|$)' deployment; then
+            echo "Mutable container image reference found."
+            exit 1
+          fi

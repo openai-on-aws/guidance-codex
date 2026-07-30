@@ -291,7 +291,7 @@ aws cloudformation deploy \
 
 # Build and push the LiteLLM image to ECR first; see the full guide for the
 # docker buildx commands and the LiteLLMImage / LiteLLMMasterKey /
-# DBUsername / DBPassword / AlbCertificateArn values required by
+# DBUsername / AlbCertificateArn values required by
 # litellm-ecs.yaml.
 aws cloudformation deploy \
   --stack-name codex-litellm-gateway \
@@ -305,8 +305,7 @@ aws cloudformation deploy \
       AlbCertificateArn="$ALB_CERTIFICATE_ARN" \
       AlbDomainName="$GATEWAY_DOMAIN_NAME" \
       LiteLLMMasterKey="$LITELLM_MASTER_KEY" \
-      DBUsername=litellm \
-      DBPassword="$DB_PASSWORD"
+      DBUsername=litellm
 ```
 
 After the gateway is reachable, distribute the `~/.codex/config.toml` snippet shown in the [Developer Configuration](docs/QUICKSTART_LLM_GATEWAY.md#developer-configuration) section of the full guide.

@@ -66,16 +66,16 @@ aws ecr create-repository \
 aws ecr get-login-password --region "$AWS_REGION" \
   | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
-# Build and push
-export LITELLM_VERSION=main-latest
+# Build and push. Resolve and review the upstream digest before this step.
+export LITELLM_BASE_IMAGE=ghcr.io/berriai/litellm@sha256:<reviewed-digest>
 export LITELLM_IMAGE_TAG=v1
-export LITELLM_IMAGE="$ECR_REGISTRY/$LITELLM_REPO:$LITELLM_IMAGE_TAG"
+export LITELLM_IMAGE_TAGGED="$ECR_REGISTRY/$LITELLM_REPO:$LITELLM_IMAGE_TAG"
 
 docker buildx create --use --name codex-builder 2>/dev/null || true
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  --build-arg LITELLM_VERSION="$LITELLM_VERSION" \
-  --tag "$LITELLM_IMAGE" \
+  --build-arg LITELLM_BASE_IMAGE="$LITELLM_BASE_IMAGE" \
+  --tag "$LITELLM_IMAGE_TAGGED" \
   --file deployment/litellm/Dockerfile \
   --push \
   deployment/litellm
@@ -86,11 +86,23 @@ docker buildx build \
 docker buildx build \
   --builder codex-builder \
   --platform linux/amd64 \
-  --build-arg LITELLM_VERSION="$LITELLM_VERSION" \
-  --tag "$LITELLM_IMAGE" \
+  --build-arg LITELLM_BASE_IMAGE="$LITELLM_BASE_IMAGE" \
+  --tag "$LITELLM_IMAGE_TAGGED" \
   --file deployment/litellm/Dockerfile \
   --push \
   deployment/litellm
+```
+
+After either build, resolve the immutable ECR digest used by CloudFormation:
+
+```bash
+export LITELLM_IMAGE_DIGEST=$(aws ecr describe-images \
+  --repository-name "$LITELLM_REPO" \
+  --image-ids imageTag="$LITELLM_IMAGE_TAG" \
+  --region "$AWS_REGION" \
+  --query 'imageDetails[0].imageDigest' \
+  --output text)
+export LITELLM_IMAGE="$ECR_REGISTRY/$LITELLM_REPO@$LITELLM_IMAGE_DIGEST"
 ```
 
 ### Step 3: Deploy Networking
@@ -134,8 +146,6 @@ aws cloudformation deploy \
 ```bash
 export GATEWAY_STACK=codex-litellm-gateway
 export MASTER_KEY=$(openssl rand -hex 32)
-# RDS rejects '/', '@', double quotes, and spaces in MasterUserPassword.
-export DB_PASSWORD="$(openssl rand -base64 24 | tr -d '/+=')"
 
 # Deploy gateway (references networking stack via imports)
 aws cloudformation deploy \
@@ -148,7 +158,6 @@ aws cloudformation deploy \
       EnableOtel="false" \
       LiteLLMMasterKey="$MASTER_KEY" \
       DBUsername=litellm \
-      DBPassword="$DB_PASSWORD" \
       AwsRegion="$BEDROCK_REGION" \
       LiteLLMImage="$LITELLM_IMAGE" \
       AlbCertificateArn="$ALB_CERTIFICATE_ARN" \
@@ -164,7 +173,6 @@ aws cloudformation deploy \
 
 # Save credentials
 echo "LITELLM_MASTER_KEY=$MASTER_KEY" > .env.gateway
-echo "DB_PASSWORD=$DB_PASSWORD" >> .env.gateway
 chmod 600 .env.gateway
 
 # Get gateway URL
@@ -428,27 +436,30 @@ docker ps
 
 ## Security Considerations
 
-This reference implementation demonstrates the LLM gateway pattern but requires security hardening before production use:
+This reference implementation includes secure defaults but still requires a
+customer landing zone, threat model, load test, and operational review before
+production use.
 
-**Known Security Gaps:**
-1. **Database Credentials** - Master key and DB password stored in plaintext (use AWS Secrets Manager rotation)
-2. **Network Exposure** - Default AllowedCidr permits VPC-wide access (use least-privilege CIDR)
-3. **RDS Encryption Scope** - RDS is already hardcoded to `PubliclyAccessible: false`; for production also review snapshot sharing, IAM auth, and CMK usage
-4. **Encryption** - Missing encryption-at-rest for ALB logs and ECS volumes
-5. **IAM Permissions** - Task role uses wildcard Bedrock permissions (scope to specific model ARNs)
-6. **DynamoDB** - User-key-mapping table lacks KMS CMK with key rotation
-7. **Logging** - No VPC Flow Logs, GuardDuty, or Security Hub integration
+**Already implemented:**
+- RDS-managed database password in Secrets Manager
+- KMS encryption for RDS, logs, secrets, and user-key mappings
+- ALB access logging and retained stateful resources
+- ECS deployment rollback, target-tracking autoscaling, alarms, and optional WAF
+- Region and Mantle-project scoping on the ECS task role
+- Immutable ECS image references
 
 **Hardening Checklist:**
-- [ ] Rotate credentials via Secrets Manager
-- [ ] Enable encryption-at-rest for all data stores (ALB logs, ECS, DynamoDB with CMK)
-- [ ] Implement least-privilege IAM (specific Bedrock model ARNs)
-- [ ] Deploy WAF rules on ALB
+- [ ] Use private ECS and database subnets with `AssignPublicIp=DISABLED`
+- [ ] Enable deletion protection after the first successful deployment
+- [ ] Configure master-key rotation and emergency revocation
+- [ ] Enable and tune WAF for the customer's traffic profile
 - [ ] Enable VPC Flow Logs and GuardDuty
 - [ ] Configure Security Hub benchmarks (CIS AWS Foundations)
-- [ ] Add resource tagging for cost allocation
+- [ ] Restore an RDS snapshot and exercise rollback in staging
+- [ ] Run the Responses contract and customer load tests
 
-For production deployments, see [AWS Well-Architected Security Pillar](https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html).
+For production settings and promotion gates, see
+[Production Deployment](PRODUCTION_DEPLOYMENT.md).
 
 ---
 

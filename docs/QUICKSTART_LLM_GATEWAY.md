@@ -39,17 +39,21 @@ Any OpenAI-compatible gateway that can call Amazon Bedrock will work. Choose the
 | Gateway | Implementation Guide | Best For |
 |---------|---------------------|----------|
 | **LiteLLM** | [QUICKSTART_LLM_GATEWAY_LITELLM.md](QUICKSTART_LLM_GATEWAY_LITELLM.md) | Organizations new to LLM gateways, learning CloudFormation deployment patterns |
+| **LiteLLM or Portkey enterprise evaluation** | [ENTERPRISE_GATEWAY_GUIDANCE.md](ENTERPRISE_GATEWAY_GUIDANCE.md) | Platform teams comparing controls, deployment models, and contract evidence |
 
 **Deployment:** ECS Fargate + Amazon RDS for PostgreSQL  
 **Features:** Budget limits, RPM/TPM limits, model routing, team quotas, admin API  
 **Setup time:** 15-20 minutes  
-**Status:** Reference implementation — requires security hardening for production use (see implementation guide)  
+**Status:** Hardened reference baseline; customer landing-zone and operational validation still required
 
 ---
 
 ### Other Gateway Options
 
 Any OpenAI-compatible gateway that integrates with Amazon Bedrock can be used with this guidance. The gateway must meet the minimum requirements listed in the [Gateway Requirements](#gateway-requirements) section below.
+
+Use the [Enterprise Gateway Guidance](ENTERPRISE_GATEWAY_GUIDANCE.md) for the
+LiteLLM/Portkey compatibility matrix, test gate, and customer control checklist.
 
 ---
 

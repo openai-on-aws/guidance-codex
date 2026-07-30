@@ -1,5 +1,7 @@
-ARG LITELLM_VERSION=main-latest
-FROM ghcr.io/berriai/litellm:${LITELLM_VERSION}
+# Pass a reviewed immutable digest, for example:
+# ghcr.io/berriai/litellm@sha256:<64-hex-digest>
+ARG LITELLM_BASE_IMAGE
+FROM ${LITELLM_BASE_IMAGE}
 
 # Install OpenTelemetry SDK for metrics export and the official Bedrock
 # bearer-token generator used for long-lived Mantle auth.
