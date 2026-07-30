@@ -43,11 +43,13 @@ def missing_links(repo_root: Path) -> list[str]:
                 target = local_target(match.group(1))
                 if not target:
                     continue
-                candidate = (
-                    repo_root / target.lstrip("/")
-                    if target.startswith("/")
-                    else source.parent / target
-                )
+                target_path = Path(target)
+                if target_path.is_absolute() and target_path.is_relative_to(repo_root):
+                    candidate = target_path
+                elif target.startswith("/"):
+                    candidate = repo_root / target.lstrip("/")
+                else:
+                    candidate = source.parent / target
                 if not candidate.resolve().exists():
                     relative_source = source.relative_to(repo_root)
                     missing.append(f"{relative_source}:{line_number}: {target}")

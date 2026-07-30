@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
@@ -297,6 +298,18 @@ class TestDocumentationLinks(unittest.TestCase):
             doc_links.local_target("guide.md#section \"Guide\""),
             "guide.md",
         )
+
+    def test_absolute_target_within_repo_exists(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            image = root / "docs" / "assets" / "image.jpg"
+            image.parent.mkdir(parents=True)
+            image.write_bytes(b"image")
+            (root / "docs" / "draft.md").write_text(
+                f"![Local image](<{image}>)\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(doc_links.missing_links(root), [])
 
 
 if __name__ == "__main__":
