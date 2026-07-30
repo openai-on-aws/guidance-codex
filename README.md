@@ -4,37 +4,58 @@ Reference access patterns for connecting [OpenAI Codex](https://developers.opena
 
 ---
 
-## Three Access Patterns
+## Three Customer Rollout Paths
 
 ```text
-Need hard quota enforcement? (Block requests when limits hit)
-│
-├── YES → LLM Gateway
-│
-└── NO → Want a fully managed gateway (multi-provider routing, content
-         guardrails, AWS-private web search) with no infra to run?
-          │
-          ├── YES → AgentCore Gateway
-          │
-          └── NO → Already use AWS IAM Identity Center?
-                    │
-                    ├── YES → Native AWS Access
-                    │
-                    └── NO → Native AWS Access (set up IdC) OR AgentCore Gateway
+Need hard budgets or centralized routing?
+|
+|-- NO  -> Native AWS Access with IAM Identity Center
+|
+`-- YES -> Want to operate the gateway data plane?
+           |-- YES -> LiteLLM on ECS
+           `-- NO  -> Portkey managed or hybrid
 ```
 
-| Pattern | Operations | Telemetry | Best For |
-|---------|------------|-----------|----------|
-| **[Native AWS Access](docs/QUICKSTART_NATIVE_AWS_ACCESS.md)** | Lowest | Optional Codex-side OTel | Teams with IdC, native per-user attribution, soft monitoring OK |
-| **[AgentCore Gateway](docs/QUICKSTART_AGENTCORE_GATEWAY.md)** | AWS managed | CloudWatch `AWS/BedrockMantle` | Managed gateway, guardrails, AWS-private web search |
-| **[LiteLLM Gateway](docs/QUICKSTART_LLM_GATEWAY_LITELLM.md)** | Customer operated | Gateway telemetry | Hard budgets, rate limiting, centralized policy |
+| Path | Operations | Identity evidence | Best for |
+|---|---|---|---|
+| **[IAM Identity Center](docs/QUICKSTART_NATIVE_AWS_ACCESS.md)** | Lowest | Native AWS session and CloudTrail identity | Existing AWS SSO and direct Bedrock access |
+| **[LiteLLM on ECS](docs/QUICKSTART_LLM_GATEWAY_LITELLM.md)** | Customer operated | Gateway key/JWT telemetry | Inspectable AWS stack and hard controls |
+| **[Portkey](docs/QUICKSTART_LLM_GATEWAY_PORTKEY.md)** | Managed or hybrid | Workspace key/JWT telemetry | Vendor-managed policy, routing, and analytics |
 
-All patterns include:
-- Corporate SSO (Okta, Azure AD, Auth0, AWS IAM Identity Center)
-- Per-user CloudTrail audit trails (Native AWS Access; gateway patterns attribute via gateway telemetry)
-- One-command authentication
-- Cross-platform support (Windows, macOS, Linux)
-- Infrastructure templates and deployment guidance for each path
+The repository also retains an
+[AgentCore Gateway](docs/QUICKSTART_AGENTCORE_GATEWAY.md) pattern for customers
+who specifically need AWS-managed routing, Bedrock Guardrails, or AWS-private
+web search.
+
+## What LiteLLM Does During a Task
+
+LiteLLM does not deploy or run Codex. Codex stays on the developer machine.
+For each turn, Codex sends a Responses request containing task context and tool
+definitions. LiteLLM authenticates the developer, applies model and budget
+policy, obtains upstream AWS credentials, and forwards the request to Bedrock
+Mantle. If the model requests a tool, Codex runs it locally and sends the result
+through LiteLLM in the next turn. That loop continues until the model returns a
+final response.
+
+```text
+Codex -> /v1/responses -> LiteLLM policy -> Bedrock Mantle
+  ^                                              |
+  `----------- local tool result <--------------'
+```
+
+The value is the control point: developers retain the normal Codex experience,
+while the platform team gets centralized identity, model access, rate limits,
+budgets, and gateway telemetry.
+
+## Live Walkthrough
+
+The LiteLLM reference was deployed and contract-tested in `us-east-1`. The
+walkthrough endpoint is CIDR-restricted and intentionally uses HTTP only;
+production defaults remain TLS and Multi-AZ.
+
+![Live LiteLLM API deployed on AWS](docs/assets/litellm-live-api.jpg)
+
+![LiteLLM administration login](docs/assets/litellm-admin-login.jpg)
 
 ## Quick Start
 
@@ -42,7 +63,8 @@ All patterns include:
 - **Native AWS Access** → [Quickstart](docs/QUICKSTART_NATIVE_AWS_ACCESS.md)
 - **AgentCore Gateway** → [Quickstart](docs/QUICKSTART_AGENTCORE_GATEWAY.md)
 - **LiteLLM Gateway** → [Primary enterprise walkthrough](docs/QUICKSTART_LLM_GATEWAY_LITELLM.md)
-- **Other LLM gateways** → [Pattern requirements](docs/QUICKSTART_LLM_GATEWAY.md)
+- **Portkey Gateway** → [Managed and hybrid evaluation](docs/QUICKSTART_LLM_GATEWAY_PORTKEY.md)
+- **Gateway requirements** → [Pattern requirements](docs/QUICKSTART_LLM_GATEWAY.md)
 
 ## Documentation
 

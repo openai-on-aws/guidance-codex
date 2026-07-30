@@ -20,7 +20,7 @@ Pick exactly one per deployment.
 
 | Template                          | Purpose                                                                |
 | --------------------------------- | ---------------------------------------------------------------------- |
-| `bedrock-auth-idc.yaml`           | IAM Identity Center role chained from `AWSReservedSSO_*` Permission Sets. |
+| `bedrock-auth-idc.yaml`           | Customer-managed Bedrock policy for direct Identity Center permission-set attachment; optional chained role. |
 | `bedrock-auth-cognito-pool.yaml`  | Cognito User Pool federated through a Cognito Identity Pool.           |
 | `bedrock-auth-okta.yaml`          | Okta OIDC provider federated through a Cognito Identity Pool.          |
 | `bedrock-auth-azure.yaml`         | Azure AD (Entra ID) OIDC provider federated through a Cognito Identity Pool. |
@@ -99,7 +99,8 @@ the full set, including `AllowedPattern` and default values.
 
 | Parameter                    | Type               | Default                   | Notes |
 | ---------------------------- | ------------------ | ------------------------- | ----- |
-| `RoleName`                   | String             | `CodexBedrockIdCRole`     | Name of the chained IAM role. |
+| `CreateChainedRole`          | String             | `false`                   | Recommended direct path leaves this false. |
+| `RoleName`                   | String             | `CodexBedrockIdCRole`     | Name of the optional chained IAM role. |
 | `PolicyName`                 | String             | `CodexBedrockInvokePolicy`| Customer-managed policy name. |
 | `PermissionSetNamePattern`   | String             | `CodexBedrockUser_*`      | Glob matched against `AWSReservedSSO_<PermissionSetName>_<hash>`. |
 | `AllowedBedrockRegions`      | CommaDelimitedList | `us-east-1,us-west-2`     | Regions where `bedrock:InvokeModel*` is allowed. |
@@ -166,8 +167,8 @@ Outputs include `GatewayEndpoint` (exported as
 
 ## Quick Start: Native AWS Access (IAM Identity Center)
 
-Single-stack deployment. The Codex CLI uses the chained IAM role directly via
-the AWS SDK.
+Single-stack deployment. The Codex CLI uses the Identity Center permission-set
+credentials directly through the AWS SDK.
 
 ```bash
 aws cloudformation deploy \
@@ -176,7 +177,7 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
       RoleName=CodexBedrockIdCRole \
-      PermissionSetNamePattern='CodexBedrockUser_*' \
+      CreateChainedRole=false \
       AllowedBedrockRegions=us-east-1,us-west-2 \
       AllowedModelIdPattern='openai.gpt-5.*'
 
@@ -185,8 +186,8 @@ aws cloudformation describe-stacks \
   --query 'Stacks[0].Outputs'
 ```
 
-Then attach the resulting `PolicyArn` (or grant `sts:AssumeRole` on
-`RoleArn`) to the IdC Permission Set used by your Codex users. See
+Then attach the resulting `PolicyName` to the Identity Center permission set
+used by your Codex users. See
 `docs/QUICKSTART_NATIVE_AWS_ACCESS.md` for the matching client-side config.
 
 ## Quick Start: LLM Gateway

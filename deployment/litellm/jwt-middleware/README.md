@@ -1,15 +1,20 @@
 # JWT Middleware for LiteLLM Gateway
 
-Custom JWT validation middleware that enables OIDC/SSO self-service API key generation **without requiring LiteLLM Enterprise license**.
+Reference JWT validation middleware for OIDC/SSO self-service key mapping when
+the native LiteLLM JWT feature is not selected. Verify current LiteLLM license
+terms before choosing between this middleware and vendor-supported JWT.
 
 ## Overview
 
-This middleware sits between your ALB and LiteLLM gateway, providing:
-- ✅ JWT token validation from corporate IdP (Okta, Azure AD, Auth0, etc.)
-- ✅ Automatic API key generation/management per user
-- ✅ User-to-key mapping with DynamoDB caching
-- ✅ Self-service portal for developers
-- ✅ **No Enterprise license required**
+This middleware sits between the ALB and LiteLLM gateway and provides:
+
+- JWT validation for Okta, Entra ID, Auth0, Cognito, and other OIDC providers
+- automatic per-user LiteLLM key generation
+- DynamoDB-backed user-to-key mapping
+- a self-service developer portal
+
+The mapping table contains gateway credentials and must remain encrypted,
+private, access-logged, and limited to the middleware task role.
 
 ## Architecture
 

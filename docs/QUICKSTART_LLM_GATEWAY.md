@@ -42,7 +42,8 @@ must preserve the Responses API behavior listed below.
 | Gateway | Implementation Guide | Best For |
 |---------|---------------------|----------|
 | **LiteLLM** | [QUICKSTART_LLM_GATEWAY_LITELLM.md](QUICKSTART_LLM_GATEWAY_LITELLM.md) | Primary enterprise walkthrough for centralized controls |
-| **LiteLLM or Portkey enterprise evaluation** | [ENTERPRISE_GATEWAY_GUIDANCE.md](ENTERPRISE_GATEWAY_GUIDANCE.md) | Platform teams comparing controls, deployment models, and contract evidence |
+| **Portkey** | [QUICKSTART_LLM_GATEWAY_PORTKEY.md](QUICKSTART_LLM_GATEWAY_PORTKEY.md) | Managed or hybrid gateway evaluation |
+| **Cross-gateway decision** | [ENTERPRISE_GATEWAY_GUIDANCE.md](ENTERPRISE_GATEWAY_GUIDANCE.md) | Platform teams comparing controls and contract evidence |
 
 **Deployment:** ECS Fargate + Amazon RDS for PostgreSQL  
 **Features:** Budget limits, RPM/TPM limits, model routing, team quotas, admin API  
@@ -57,8 +58,10 @@ Bedrock API can be evaluated with this guidance. It is supported by this
 repository only after it meets the [Gateway Requirements](#gateway-requirements)
 and passes the executable contract probe.
 
-Use the [Enterprise Gateway Guidance](ENTERPRISE_GATEWAY_GUIDANCE.md) for the
-LiteLLM/Portkey compatibility matrix, test gate, and customer control checklist.
+Use the [Portkey Quick Start](QUICKSTART_LLM_GATEWAY_PORTKEY.md) for its current
+Model Catalog flow and the
+[Enterprise Gateway Guidance](ENTERPRISE_GATEWAY_GUIDANCE.md) for the
+compatibility matrix and production gate.
 
 ---
 
@@ -113,7 +116,7 @@ gateway path.)
 
 Follow your chosen gateway's implementation guide:
 - **LiteLLM**: Build Docker image → push to ECR → deploy ECS stack
-- **Portkey**: Sign up → create virtual keys → configure Bedrock integration
+- **Portkey**: Create a workspace key -> configure a Model Catalog Bedrock integration -> run the strict contract probe
 - **Kong**: Deploy gateway → configure Bedrock upstream → enable plugins
 - **Bifrost**: Deploy to ECS/EKS → configure config.yaml → point at Bedrock
 - **Helicone**: Sign up → configure proxy → add Bedrock as provider

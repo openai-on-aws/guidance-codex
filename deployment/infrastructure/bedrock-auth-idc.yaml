@@ -1,7 +1,13 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Codex with Bedrock - IAM Identity Center (IdC) Authentication Stack. Produces a Bedrock customer-managed policy and an IAM role trusted by sso.amazonaws.com with an AWSReservedSSO_* role-chaining condition, for use as the permission-boundary / role-chain target from an IdC Permission Set.'
+Description: 'Codex with Bedrock - IAM Identity Center authentication baseline. Produces a least-privilege customer-managed policy for direct attachment to an Identity Center permission set, with an optional chained IAM role.'
 
 Parameters:
+  CreateChainedRole:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Create an optional second IAM role for customers that require role chaining. The recommended direct permission-set path leaves this false.
+
   RoleName:
     Type: String
     Default: CodexBedrockIdCRole
@@ -52,6 +58,7 @@ Parameters:
 
 Conditions:
   MonitoringEnabled: !Equals [!Ref EnableMonitoring, 'true']
+  ChainedRoleEnabled: !Equals [!Ref CreateChainedRole, 'true']
 
 Resources:
   CodexBedrockInvokePolicy:
@@ -125,6 +132,7 @@ Resources:
 
   CodexBedrockIdCRole:
     Type: AWS::IAM::Role
+    Condition: ChainedRoleEnabled
     Properties:
       RoleName: !Ref RoleName
       Description: Chained role assumed from an IdC AWSReservedSSO_* session for Codex-on-Bedrock usage.
@@ -153,12 +161,17 @@ Resources:
 Outputs:
   RoleArn:
     Description: ARN of the chained Bedrock role. Reference from Codex config or as a role-chain target.
+    Condition: ChainedRoleEnabled
     Value: !GetAtt CodexBedrockIdCRole.Arn
     Export:
       Name: !Sub '${AWS::StackName}-RoleArn'
   RoleName:
     Description: Name of the chained Bedrock role.
+    Condition: ChainedRoleEnabled
     Value: !Ref CodexBedrockIdCRole
+  PolicyName:
+    Description: Name of the customer-managed policy to attach directly to the Identity Center permission set.
+    Value: !Ref PolicyName
   PolicyArn:
     Description: ARN of the Bedrock customer-managed policy. Attach directly to the IdC Permission Set if you prefer no role chaining.
     Value: !Ref CodexBedrockInvokePolicy

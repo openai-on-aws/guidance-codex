@@ -30,18 +30,21 @@ Known SCIM quirks:
 - Nested groups from EntraID do **not** flatten — provision leaf groups.
 - Attribute mapping for email/username occasionally trips initial setup.
 
-### 3. Deploy the Bedrock auth stack
+### 3. Deploy the Bedrock policy stack
 
 ```bash
 aws cloudformation deploy \
   --stack-name codex-bedrock-idc \
   --template-file deployment/infrastructure/bedrock-auth-idc.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
+  --parameter-overrides CreateChainedRole=false \
   --region us-west-2
 ```
 
-Outputs include the customer-managed policy ARN to attach to the permission
-set in the next step.
+Outputs include the customer-managed policy ARN and name to attach directly to
+the permission set in the next step. Direct attachment is the recommended
+default. A second chained role is available with `CreateChainedRole=true` for
+customers that require that boundary.
 
 ### 4. Create the `CodexBedrockUser` permission set
 
@@ -155,6 +158,16 @@ codex                  # AWS_PROFILE is resolved via the [model_providers.amazon
 
 `aws sso login` opens a browser for IdC sign-in and caches an 8-hour token.
 Codex picks up the SSO credentials through the standard AWS SDK credential chain.
+
+For an idempotent repository-managed validation, use:
+
+```bash
+make idc-check
+make idc-deploy
+make idc-provision
+make idc-client-config
+make idc-validate
+```
 
 ### Headless / remote hosts (no local browser)
 

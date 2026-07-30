@@ -39,12 +39,12 @@ customer's retention policy.
 
 | Capability | LiteLLM reference | Portkey evaluation |
 |------------|-------------------|--------------------|
-| Responses endpoint | Configured; local tests cover the probe, live gateway evidence pending | Documented by Portkey; run the repository probe |
+| Responses endpoint | Live contract probe passed in `us-east-1` | Documented by Portkey; strict live probe requires a workspace key |
 | Bedrock Mantle GPT-5.x | Configured with `bedrock_mantle/` and server-side token refresh | Not verified by this repository; do not infer Mantle support from classic Bedrock support |
 | Classic Bedrock assumed role | ECS task role | Documented Portkey integration pattern |
 | OIDC/JWT | Included middleware; compare licensed LiteLLM features against current vendor terms | Verify Portkey workspace/service-account controls for the selected tier |
 | Per-user/team budgets | Vendor documented; prove blocking with customer policy | Vendor documented; prove blocking with customer policy |
-| Customer-operated data plane | ECS reference stack | Evaluate Portkey hybrid deployment and support terms |
+| Customer-operated data plane | ECS reference stack | Hybrid ECS requires vendor-issued image credentials, client auth, and organization ID |
 | Promotion gate | CI plus Responses contract probe | Same probe, plus vendor-specific integration tests |
 
 `Documented` means the vendor describes the feature. `Verified` means this
@@ -95,15 +95,15 @@ Use Portkey when the customer prefers a managed control plane or an evaluated
 hybrid deployment and wants vendor-provided policy, analytics, and virtual-key
 workflows.
 
-Start with a non-production workspace and one test identity. Configure an AWS
+Start with a non-production workspace and one test identity. Portkey's current
+Model Catalog replaces the older virtual-key-first flow. Configure an AWS
 role with an external ID and only the provider actions and resources required
 by the selected route. Portkey's classic Bedrock assumed-role guidance is not
 evidence that Bedrock Mantle's Responses endpoint is supported. Require Portkey
 to identify the exact upstream API, IAM actions, region, model identifier,
 credential refresh behavior, and data path in the customer design.
 
-A header-based Portkey evaluation can use Codex custom-provider
-environment-backed headers:
+A Portkey evaluation can use Codex custom-provider bearer authentication:
 
 ```toml
 model = "<portkey-model-alias>"
@@ -113,30 +113,30 @@ model_provider = "portkey"
 name = "Portkey"
 base_url = "https://api.portkey.ai/v1"
 wire_api = "responses"
-env_http_headers = {
-  "x-portkey-api-key" = "PORTKEY_API_KEY",
-  "x-portkey-virtual-key" = "PORTKEY_VIRTUAL_KEY"
-}
+env_key = "PORTKEY_API_KEY"
 ```
 
-Confirm the endpoint and required headers against the customer's Portkey
-workspace before distribution. Keep both values in the operating-system secret
-store or an approved credential helper, not in `config.toml`.
+Confirm the endpoint and key scope against the customer's Portkey workspace
+before distribution. Keep the key in the operating-system secret store or an
+approved credential helper, not in `config.toml`.
 
 The repository probe accepts the same secret headers without putting their
 values in command-line arguments:
 
 ```bash
 export GATEWAY_BASE_URL=https://api.portkey.ai/v1
-export GATEWAY_API_KEY=<test-bearer-key>
 export PORTKEY_API_KEY=<secret>
-export PORTKEY_VIRTUAL_KEY=<secret>
+export GATEWAY_MODEL=@<provider-slug>/<model-id>
 
 python3 deployment/scripts/validate-responses-contract.py \
-  --header-env x-portkey-api-key=PORTKEY_API_KEY \
-  --header-env x-portkey-virtual-key=PORTKEY_VIRTUAL_KEY \
+  --api-key-env PORTKEY_API_KEY \
   --include-tool-call
 ```
+
+Portkey documents `previous_response_id` as unavailable for adapter providers,
+including classic Bedrock. The repository probe checks that continuation is
+semantic, so an ignored continuation ID cannot produce a false pass. See the
+[Portkey Quick Start](QUICKSTART_LLM_GATEWAY_PORTKEY.md).
 
 Do not mark the Portkey route production-ready until the contract probe passes
 with the intended Bedrock GPT-5.x model and the following evidence is captured:

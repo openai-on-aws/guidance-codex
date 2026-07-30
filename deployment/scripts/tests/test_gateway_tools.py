@@ -36,6 +36,21 @@ class TestResponsesContract(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Authorization"):
             contract.build_headers(None, {})
 
+    def test_validate_continuation_requires_remembered_value(self):
+        response = {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {"type": "output_text", "text": "CODEX_GATEWAY_7F3A"}
+                    ],
+                }
+            ]
+        }
+        contract.validate_continuation(response, "CODEX_GATEWAY_7F3A")
+        with self.assertRaisesRegex(RuntimeError, "previous_response_id"):
+            contract.validate_continuation(response, "different")
+
     def test_validate_stream_accepts_completed_responses_stream(self):
         body = (
             b"event: response.created\n"

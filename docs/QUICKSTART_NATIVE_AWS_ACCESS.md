@@ -18,6 +18,39 @@ using the repository's CloudFormation baseline.
 
 ---
 
+## Automated Validation Path
+
+The helper creates an isolated group and permission set without modifying
+existing assignments:
+
+```bash
+cp deployment/idc/.env.deploy.example deployment/idc/.env.deploy
+# Set AWS_PROFILE, IDC_USER_NAME, and IDC_START_URL.
+
+make idc-check
+make idc-plan
+make idc-deploy
+make idc-provision
+make idc-client-config
+```
+
+The default stack creates only the customer-managed Bedrock policy. Attach it
+directly to the permission set, which is the shortest and most auditable path.
+Set `CreateChainedRole=true` only when a customer explicitly requires a second
+role hop.
+
+After adding the printed profile to `~/.aws/config`:
+
+```bash
+aws sso login --profile codex-bedrock-validation
+make idc-validate
+```
+
+Set `RUN_CODEX_VALIDATION=true` in the ignored env file to include a real Codex
+task through the built-in `amazon-bedrock` provider.
+
+---
+
 ## Overview
 
 **What You're Deploying:**
@@ -74,9 +107,8 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_NAMED_IAM \
   --region "$AWS_REGION" \
   --parameter-overrides \
-      RoleName=CodexBedrockIdCRole \
       PolicyName=CodexBedrockInvokePolicy \
-      PermissionSetNamePattern='CodexBedrockUser_*' \
+      CreateChainedRole=false \
       AllowedBedrockRegions='us-east-1,us-west-2' \
       AllowedModelIdPattern='*' \
       MaxSessionDurationSeconds=28800
@@ -94,9 +126,9 @@ aws cloudformation describe-stacks \
 ```
 
 **Stack creates:**
-- IAM Role: `CodexBedrockIdCRole`
-- IAM Managed Policy: `CodexBedrockInvokePolicy` (scoped to `bedrock:InvokeModel*` and `bedrock-mantle:CreateInference` for GPT-5.4 via the Mantle endpoint)
-- Trust relationship: trusted by `AWSReservedSSO_CodexBedrockUser_*` role-chaining
+- IAM managed policy: `CodexBedrockInvokePolicy`
+- Scoped classic Bedrock and Bedrock Mantle inference permissions
+- Optional chained role only when `CreateChainedRole=true`
 
 #### Step 3: Create the Permission Set in IAM Identity Center
 

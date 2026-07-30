@@ -8,6 +8,16 @@ Deploy a LiteLLM gateway on ECS Fargate and connect Codex to an Amazon Bedrock
 backend. This is the repository's primary enterprise implementation of the
 [LLM Gateway pattern](QUICKSTART_LLM_GATEWAY.md).
 
+## What the Deployment Looks Like
+
+These screenshots are from the live `us-east-1` walkthrough. The API surface
+confirms that the proxy is reachable; the administration UI is where operators
+inspect models and manage keys.
+
+![Live LiteLLM API on ECS](assets/litellm-live-api.jpg)
+
+![LiteLLM administration login](assets/litellm-admin-login.jpg)
+
 **Features:**
 - Per-user and per-team budget limits (`max_budget`, `budget_duration`)
 - Rate limiting (RPM and TPM controls)

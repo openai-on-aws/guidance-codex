@@ -145,6 +145,27 @@ def validate_response(response: dict, request_name: str) -> str:
     return response["id"]
 
 
+def response_output_text(response: dict) -> str:
+    chunks = []
+    for item in response.get("output", []):
+        if item.get("type") != "message":
+            continue
+        for content in item.get("content", []):
+            if content.get("type") == "output_text" and isinstance(
+                content.get("text"), str
+            ):
+                chunks.append(content["text"])
+    return "".join(chunks)
+
+
+def validate_continuation(response: dict, expected_text: str) -> None:
+    actual = response_output_text(response)
+    if expected_text not in actual:
+        raise RuntimeError(
+            "continuation request did not recall state from previous_response_id"
+        )
+
+
 def validate_stream(content_type: str, body: bytes) -> None:
     if "text/event-stream" not in content_type.lower():
         raise RuntimeError(
@@ -229,12 +250,16 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    continuation_value = "CODEX_GATEWAY_7F3A"
     first = send_response(
         args.base_url,
         args.headers,
         {
             "model": args.model,
-            "input": "Reply with the single word READY.",
+            "input": (
+                f"Remember the exact value {continuation_value}. "
+                "Reply with the single word READY."
+            ),
             "reasoning": {"effort": "low"},
             "text": {"verbosity": "low"},
             "prompt_cache_key": "enterprise-gateway-contract",
@@ -249,7 +274,7 @@ def main() -> int:
         args.headers,
         {
             "model": args.model,
-            "input": "Reply with the single word COMPLETE.",
+            "input": "Reply with only the exact value I asked you to remember.",
             "previous_response_id": first_id,
             "reasoning": {"effort": "low"},
             "text": {"verbosity": "low"},
@@ -258,6 +283,7 @@ def main() -> int:
         args.timeout,
     )
     validate_response(follow_up, "continuation request")
+    validate_continuation(follow_up, continuation_value)
 
     checks = ["fields", "response shape", "continuation"]
     if not args.skip_streaming:
