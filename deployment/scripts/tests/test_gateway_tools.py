@@ -18,6 +18,7 @@ def load_script(module_name, filename):
 contract = load_script("responses_contract", "validate-responses-contract.py")
 preflight = load_script("litellm_preflight", "preflight-litellm.py")
 provision_key = load_script("provision_litellm_key", "provision-litellm-key.py")
+secret_auth = load_script("aws_secret_auth", "aws-secret-auth.py")
 doc_links = load_script("doc_links", "validate-doc-links.py")
 
 
@@ -288,6 +289,49 @@ class TestLiteLLMKeyProvisioning(unittest.TestCase):
             )
 
 
+class TestAwsSecretAuth(unittest.TestCase):
+    def test_resolves_json_field_without_putting_value_in_arguments(self):
+        result = type(
+            "Result",
+            (),
+            {
+                "returncode": 0,
+                "stdout": '{"LITELLM_API_KEY":"sk-secret-value"}\n',
+                "stderr": "",
+            },
+        )()
+        with patch.object(secret_auth.subprocess, "run", return_value=result) as run:
+            value = secret_auth.resolve_secret_field(
+                aws_cli="/usr/local/bin/aws",
+                region="us-east-1",
+                secret_id="gateway/codex-key",
+                field="LITELLM_API_KEY",
+                profile="codex-developer",
+            )
+        self.assertEqual(value, "sk-secret-value")
+        self.assertNotIn("sk-secret-value", run.call_args.args[0])
+        self.assertIn("codex-developer", run.call_args.args[0])
+
+    def test_rejects_missing_or_non_string_field(self):
+        result = type(
+            "Result",
+            (),
+            {
+                "returncode": 0,
+                "stdout": '{"OTHER_KEY":"value"}\n',
+                "stderr": "",
+            },
+        )()
+        with patch.object(secret_auth.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(RuntimeError, "does not contain"):
+                secret_auth.resolve_secret_field(
+                    aws_cli="/usr/local/bin/aws",
+                    region="us-east-1",
+                    secret_id="gateway/codex-key",
+                    field="LITELLM_API_KEY",
+                )
+
+
 class TestDocumentationLinks(unittest.TestCase):
     def test_external_and_anchor_targets_are_ignored(self):
         self.assertIsNone(doc_links.local_target("https://example.com/path"))
@@ -309,6 +353,14 @@ class TestDocumentationLinks(unittest.TestCase):
                 f"![Local image](<{image}>)\n",
                 encoding="utf-8",
             )
+            self.assertEqual(doc_links.missing_links(root), [])
+
+    def test_ignored_browser_artifacts_are_not_scanned(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            artifact = root / "output" / "playwright" / "trace.md"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text("[missing](not-present.md)\n", encoding="utf-8")
             self.assertEqual(doc_links.missing_links(root), [])
 
 

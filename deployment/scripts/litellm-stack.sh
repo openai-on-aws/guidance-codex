@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ENV_FILE="${LITELLM_ENV_FILE:-$REPO_ROOT/deployment/litellm/.env.deploy}"
 STATE_FILE="${LITELLM_STATE_FILE:-$REPO_ROOT/deployment/litellm/.deploy-state}"
+SECRET_AUTH_HELPER="$SCRIPT_DIR/aws-secret-auth.py"
 
 if [[ -f "$ENV_FILE" ]]; then
   set -a
@@ -46,6 +47,8 @@ Commands:
   provision-key Create a scoped LiteLLM key and store it in Secrets Manager.
   codex-config  Print a Codex provider config using runtime secret resolution.
   validate      Run the Responses contract without exposing the admin key.
+  cleanup-plan  List resources and retention behavior before stack deletion.
+  cleanup       Delete the gateway stack after exact-name confirmation.
 
 Required configuration:
   Copy deployment/litellm/.env.deploy.example to .env.deploy and set:
@@ -57,7 +60,10 @@ Required configuration:
 
 Safety:
   build and deploy require CONFIRM_AWS_WRITE=1.
-  codex-config and validate use asm-exec so secrets do not enter shell output.
+  cleanup requires CONFIRM_STACK_DELETE to exactly match GATEWAY_STACK.
+  Networking deletion is opt-in and requires DELETE_NETWORKING=1 plus
+  CONFIRM_NETWORKING_DELETE matching NETWORKING_STACK.
+  Secret values stay in the authentication command or child-process environment.
   Nothing in this script pushes git commits or branches.
 EOF
 }
@@ -111,21 +117,6 @@ subprocess.run(
 )
 PY
   docker buildx version >/dev/null 2>&1 || die "Docker buildx is unavailable."
-}
-
-resolve_asm_exec() {
-  local candidate="${ASM_EXEC:-}"
-  local aws_cli_dir
-  if [[ -z "$candidate" ]]; then
-    candidate="$(command -v asm-exec 2>/dev/null || true)"
-  fi
-  [[ -n "$candidate" && -x "$candidate" ]] || die \
-    "asm-exec is required for runtime secret resolution; set ASM_EXEC to its executable path."
-  resolve_aws_cli
-  aws_cli_dir="$(dirname "$AWS_CLI")"
-  PATH="$aws_cli_dir:$PATH"
-  ASM_EXEC="$candidate"
-  export ASM_EXEC PATH
 }
 
 confirm_write() {
@@ -367,36 +358,45 @@ run_status() {
     --output json
 }
 
-secret_reference() {
-  local secret_id="$1"
-  local json_key="$2"
-  printf '{{resolve:secretsmanager:%s:SecretString:%s}}\n' \
-    "$secret_id" "$json_key"
-}
-
-master_secret_reference() {
-  secret_reference "$GATEWAY_STACK/litellm-secrets" LITELLM_MASTER_KEY
-}
-
 run_provision_key() {
   confirm_write
   check_identity
-  resolve_asm_exec
-  local admin_endpoint master_ref secret_id kms_key_arn
+  local admin_endpoint secret_id kms_key_arn
+  local -a key_parameters
   admin_endpoint="$(stack_output GatewayAdminEndpoint)"
-  master_ref="$(master_secret_reference)"
   secret_id="${CODEX_API_SECRET_ID:-$GATEWAY_STACK/codex-walkthrough-key}"
   kms_key_arn="$(stack_output LiteLLMKmsKeyArn)"
+  key_parameters=(
+    --key-alias "${CODEX_KEY_ALIAS:-codex-walkthrough}"
+    --models "${CODEX_KEY_MODELS:-gpt-5.5}"
+  )
+  [[ -z "${CODEX_KEY_USER_ID:-}" ]] ||
+    key_parameters+=(--user-id "$CODEX_KEY_USER_ID")
+  [[ -z "${CODEX_KEY_TEAM_ID:-}" ]] ||
+    key_parameters+=(--team-id "$CODEX_KEY_TEAM_ID")
+  [[ -z "${CODEX_KEY_MAX_BUDGET:-}" ]] ||
+    key_parameters+=(--max-budget "$CODEX_KEY_MAX_BUDGET")
+  [[ -z "${CODEX_KEY_BUDGET_DURATION:-}" ]] ||
+    key_parameters+=(--budget-duration "$CODEX_KEY_BUDGET_DURATION")
+  [[ -z "${CODEX_KEY_TPM_LIMIT:-}" ]] ||
+    key_parameters+=(--tpm-limit "$CODEX_KEY_TPM_LIMIT")
+  [[ -z "${CODEX_KEY_RPM_LIMIT:-}" ]] ||
+    key_parameters+=(--rpm-limit "$CODEX_KEY_RPM_LIMIT")
 
-  "$ASM_EXEC" env "LITELLM_MASTER_KEY=$master_ref" \
+  python3 "$SECRET_AUTH_HELPER" \
+    --aws-cli "$AWS_CLI" \
+    --region "$AWS_REGION" \
+    --secret-id "$GATEWAY_STACK/litellm-secrets" \
+    --field LITELLM_MASTER_KEY \
+    --profile "${AWS_PROFILE:-default}" \
+    exec-env --env LITELLM_MASTER_KEY -- \
     python3 "$SCRIPT_DIR/provision-litellm-key.py" \
       --admin-url "$admin_endpoint" \
       --secret-id "$secret_id" \
       --kms-key-id "$kms_key_arn" \
       --aws-cli "$AWS_CLI" \
       --region "$AWS_REGION" \
-      --key-alias "${CODEX_KEY_ALIAS:-codex-walkthrough}" \
-      --models "${CODEX_KEY_MODELS:-gpt-5.5}"
+      "${key_parameters[@]}"
 
   umask 077
   printf 'CODEX_API_SECRET_ID=%q\n' "$secret_id" >>"$STATE_FILE"
@@ -405,21 +405,22 @@ run_provision_key() {
 
 run_codex_config() {
   check_identity
-  resolve_asm_exec
-  local endpoint secret_ref
+  local endpoint python_cli
   require CODEX_API_SECRET_ID
   endpoint="$(stack_output GatewayEndpoint)"
-  secret_ref="$(secret_reference "$CODEX_API_SECRET_ID" LITELLM_API_KEY)"
+  python_cli="$(command -v python3)"
   python3 - \
     "$endpoint" \
-    "$ASM_EXEC" \
-    "$secret_ref" \
-    "${AWS_PROFILE:-default}" \
-    "$AWS_REGION" <<'PY'
+    "$python_cli" \
+    "$SECRET_AUTH_HELPER" \
+    "$AWS_CLI" \
+    "$CODEX_API_SECRET_ID" \
+    "$AWS_REGION" \
+    "${AWS_PROFILE:-default}" <<'PY'
 import json
 import sys
 
-endpoint, asm_exec, secret_ref, aws_profile, aws_region = sys.argv[1:]
+endpoint, python_cli, helper, aws_cli, secret_id, aws_region, aws_profile = sys.argv[1:]
 print('model = "gpt-5.5"')
 print('model_provider = "litellm-gateway"')
 print('web_search = "disabled"')
@@ -430,23 +431,29 @@ print(f"base_url = {json.dumps(endpoint)}")
 print('wire_api = "responses"')
 print()
 print("[model_providers.litellm-gateway.auth]")
-print('command = "/usr/bin/env"')
+print(f"command = {json.dumps(python_cli)}")
 print(
     "args = ["
     + ", ".join(
         json.dumps(value)
         for value in [
-            f"AWS_PROFILE={aws_profile}",
-            f"AWS_REGION={aws_region}",
-            "PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin",
-            asm_exec,
-            "/usr/bin/printf",
-            "%s\\n",
-            secret_ref,
+            helper,
+            "--aws-cli",
+            aws_cli,
+            "--region",
+            aws_region,
+            "--secret-id",
+            secret_id,
+            "--field",
+            "LITELLM_API_KEY",
+            "--profile",
+            aws_profile,
+            "print-token",
         ]
     )
     + "]"
 )
+print("timeout_ms = 30000")
 print("refresh_interval_ms = 300000")
 PY
 }
@@ -462,19 +469,109 @@ run_validate() {
     return
   fi
 
-  resolve_asm_exec
-  local secret_ref
+  local secret_id secret_field
   if [[ -n "${CODEX_API_SECRET_ID:-}" ]]; then
-    secret_ref="$(secret_reference "$CODEX_API_SECRET_ID" LITELLM_API_KEY)"
+    secret_id="$CODEX_API_SECRET_ID"
+    secret_field="LITELLM_API_KEY"
   else
     log "No scoped key is configured; using the admin key for this contract probe only."
-    secret_ref="$(master_secret_reference)"
+    secret_id="$GATEWAY_STACK/litellm-secrets"
+    secret_field="LITELLM_MASTER_KEY"
   fi
-  "$ASM_EXEC" env \
-    "GATEWAY_API_KEY=$secret_ref" \
-    "GATEWAY_BASE_URL=$endpoint" \
-    "GATEWAY_MODEL=${GATEWAY_MODEL:-gpt-5.5}" \
+  GATEWAY_BASE_URL="$endpoint" \
+    GATEWAY_MODEL="${GATEWAY_MODEL:-gpt-5.5}" \
+    python3 "$SECRET_AUTH_HELPER" \
+      --aws-cli "$AWS_CLI" \
+      --region "$AWS_REGION" \
+      --secret-id "$secret_id" \
+      --field "$secret_field" \
+      --profile "${AWS_PROFILE:-default}" \
+      exec-env --env GATEWAY_API_KEY -- \
     python3 "$SCRIPT_DIR/validate-responses-contract.py" --include-tool-call
+}
+
+run_cleanup_plan() {
+  check_identity
+  local stack_status
+  stack_status="$(aws_cli cloudformation describe-stacks \
+    --stack-name "$GATEWAY_STACK" \
+    --region "$AWS_REGION" \
+    --query 'Stacks[0].StackStatus' \
+    --output text 2>/dev/null)" || die \
+      "Gateway stack $GATEWAY_STACK was not found in $AWS_REGION."
+
+  printf '%s\n' \
+    "Gateway stack: $GATEWAY_STACK ($stack_status)" \
+    "Networking stack: $NETWORKING_STACK" \
+    "Delete gateway: CONFIRM_STACK_DELETE=$GATEWAY_STACK make litellm-cleanup" \
+    "Delete networking too: add DELETE_NETWORKING=1 and" \
+    "  CONFIRM_NETWORKING_DELETE=$NETWORKING_STACK" \
+    "" \
+    "CloudFormation retention behavior:" \
+    "  - RDS creates a final snapshot." \
+    "  - KMS keys, Secrets Manager secrets, the log group, and the ALB log" \
+    "    bucket are retained." \
+    "  - ECR images and a provisioned scoped-key secret are outside stack" \
+    "    deletion and remain." \
+    "Review and remove retained resources under your organization's data" \
+    "retention policy after the stack deletion completes."
+
+  aws_cli cloudformation list-stack-resources \
+    --stack-name "$GATEWAY_STACK" \
+    --region "$AWS_REGION" \
+    --query 'StackResourceSummaries[].{Type:ResourceType,LogicalId:LogicalResourceId,PhysicalId:PhysicalResourceId}' \
+    --output table
+}
+
+run_cleanup() {
+  [[ "${CONFIRM_STACK_DELETE:-}" == "$GATEWAY_STACK" ]] || die \
+    "Set CONFIRM_STACK_DELETE=$GATEWAY_STACK to confirm gateway deletion."
+  if [[ "${DELETE_NETWORKING:-0}" == "1" ]]; then
+    [[ "${CONFIRM_NETWORKING_DELETE:-}" == "$NETWORKING_STACK" ]] || die \
+      "Set CONFIRM_NETWORKING_DELETE=$NETWORKING_STACK to confirm networking deletion."
+  fi
+  check_identity
+
+  local db_id deletion_protection
+  db_id="$(aws_cli cloudformation describe-stack-resource \
+    --stack-name "$GATEWAY_STACK" \
+    --logical-resource-id RDSInstance \
+    --region "$AWS_REGION" \
+    --query 'StackResourceDetail.PhysicalResourceId' \
+    --output text 2>/dev/null || true)"
+  if [[ -n "$db_id" && "$db_id" != "None" ]]; then
+    deletion_protection="$(aws_cli rds describe-db-instances \
+      --db-instance-identifier "$db_id" \
+      --region "$AWS_REGION" \
+      --query 'DBInstances[0].DeletionProtection' \
+      --output text)"
+    [[ "$deletion_protection" != "True" ]] || die \
+      "RDS deletion protection is enabled. Disable it through an approved stack update before cleanup."
+  fi
+
+  log "Deleting gateway stack $GATEWAY_STACK; retained resources are not deleted."
+  aws_cli cloudformation delete-stack \
+    --stack-name "$GATEWAY_STACK" \
+    --region "$AWS_REGION"
+  aws_cli cloudformation wait stack-delete-complete \
+    --stack-name "$GATEWAY_STACK" \
+    --region "$AWS_REGION"
+  log "Gateway stack deletion completed."
+
+  if [[ "${DELETE_NETWORKING:-0}" == "1" ]]; then
+    log "Deleting networking stack $NETWORKING_STACK."
+    aws_cli cloudformation delete-stack \
+      --stack-name "$NETWORKING_STACK" \
+      --region "$AWS_REGION"
+    aws_cli cloudformation wait stack-delete-complete \
+      --stack-name "$NETWORKING_STACK" \
+      --region "$AWS_REGION"
+    log "Networking stack deletion completed."
+  else
+    log "Networking stack $NETWORKING_STACK was preserved."
+  fi
+
+  log "Review retained snapshots, KMS keys, secrets, log groups, ALB log buckets, and ECR images."
 }
 
 case "${1:-help}" in
@@ -486,6 +583,8 @@ case "${1:-help}" in
   provision-key) run_provision_key ;;
   codex-config) run_codex_config ;;
   validate) run_validate ;;
+  cleanup-plan) run_cleanup_plan ;;
+  cleanup) run_cleanup ;;
   help|-h|--help) usage ;;
   *) usage >&2; die "unknown command: $1" ;;
 esac

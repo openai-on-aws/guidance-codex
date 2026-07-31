@@ -22,3 +22,4 @@ __pycache__/
 
 # Local walkthrough screenshots, recordings, and browser traces
 /output/playwright/
+/.playwright-cli/

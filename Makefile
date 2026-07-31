@@ -5,6 +5,7 @@ IDC_SCRIPT := deployment/scripts/idc-stack.sh
 
 .PHONY: help litellm-check litellm-build litellm-plan litellm-deploy \
 	litellm-status litellm-provision-key litellm-codex-config litellm-validate \
+	litellm-cleanup-plan litellm-cleanup \
 	portkey-check portkey-codex-config portkey-validate \
 	idc-check idc-plan idc-deploy idc-provision idc-status idc-client-config \
 	idc-validate
@@ -16,6 +17,7 @@ help:
 		'LiteLLM on ECS:' \
 		'  make litellm-check litellm-build litellm-plan litellm-deploy' \
 		'  make litellm-status litellm-provision-key litellm-codex-config litellm-validate' \
+		'  make litellm-cleanup-plan litellm-cleanup' \
 		'' \
 		'Portkey evaluation:' \
 		'  make portkey-check portkey-codex-config portkey-validate' \
@@ -47,6 +49,12 @@ litellm-codex-config:
 
 litellm-validate:
 	@$(LITELLM_SCRIPT) validate
+
+litellm-cleanup-plan:
+	@$(LITELLM_SCRIPT) cleanup-plan
+
+litellm-cleanup:
+	@$(LITELLM_SCRIPT) cleanup
 
 portkey-check:
 	@$(PORTKEY_SCRIPT) check

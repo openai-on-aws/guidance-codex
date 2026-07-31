@@ -10,13 +10,19 @@ backend. This is the repository's primary enterprise implementation of the
 
 ## What the Deployment Looks Like
 
-These screenshots are from the live `us-east-1` walkthrough. The API surface
-confirms that the proxy is reachable; the administration UI is where operators
-inspect models and manage keys.
+The reference flow keeps the Codex task loop on the developer workstation and
+places model authentication, policy, routing, and telemetry in the customer
+AWS account.
+
+![Codex request flow through LiteLLM on AWS](assets/litellm-architecture.png)
+
+The following images are from the live `us-east-1` walkthrough. The API
+surface confirms the deployed proxy is reachable, and the validation summary
+records stack health plus the Responses contract checks.
 
 ![Live LiteLLM API on ECS](assets/litellm-live-api.jpg)
 
-![LiteLLM administration login](assets/litellm-admin-login.jpg)
+![Live LiteLLM deployment and contract validation](assets/litellm-validation-evidence.png)
 
 **Features:**
 - Per-user and per-team budget limits (`max_budget`, `budget_duration`)
@@ -34,7 +40,6 @@ inspect models and manage keys.
 - Amazon Bedrock activated in target region (this walkthrough uses `us-east-1`)
 - AWS CLI v2 installed and authenticated
 - Docker installed and running
-- `asm-exec` available for runtime Secrets Manager references
 - [Codex CLI](https://developers.openai.com/codex/cli) installed
 - A public Route 53 hosted zone, or an existing ACM certificate in the deployment Region
 - A DNS name in that zone for the trusted Codex HTTPS endpoint
@@ -49,7 +54,7 @@ The Make targets wrap the detailed commands below and never push git changes:
 
 ```bash
 cp deployment/litellm/.env.deploy.example deployment/litellm/.env.deploy
-# Edit the gitignored file with your profile, DNS, CIDR, and asm-exec path.
+# Edit the gitignored file with your profile, DNS, and CIDR.
 
 make litellm-check
 CONFIRM_AWS_WRITE=1 make litellm-build
@@ -71,6 +76,11 @@ stack. The one-command `litellm-deploy` deploys both stacks sequentially and
 requires the explicit write confirmation shown above. `litellm-provision-key`
 creates a model-scoped LiteLLM key, writes it to Secrets Manager without
 printing it, and records only the secret ID in the gitignored deployment state.
+
+The deployment creates billable resources, including an Application Load
+Balancer, ECS tasks, RDS, NAT gateways when the sample VPC is used, WAF, logs,
+and model inference. Review current prices for your Region and clean up a
+walkthrough promptly.
 
 ### Step 1: Clone and Set Variables
 
@@ -244,11 +254,9 @@ export GATEWAY_ADMIN_URL=$(aws cloudformation describe-stacks \
 
 echo "Gateway URL: $GATEWAY_URL"
 
-# Create a dynamic reference; the secret value is resolved only inside asm-exec.
 export LITELLM_SECRET_ARN=$(aws cloudformation describe-stacks \
   --stack-name "$GATEWAY_STACK" --region "$AWS_REGION" \
   --query 'Stacks[0].Outputs[?OutputKey==`LiteLLMSecretArn`].OutputValue' --output text)
-export MASTER_KEY_REF="{{resolve:secretsmanager:${LITELLM_SECRET_ARN}:SecretString:LITELLM_MASTER_KEY}}"
 ```
 
 For a short-lived walkthrough when no trusted DNS name is available, the
@@ -290,22 +298,22 @@ workflow.
 #### Option A: Admin-Generated Keys
 
 ```bash
-# Generate key for a user without exposing the admin key to the shell.
-asm-exec curl -X POST "$GATEWAY_ADMIN_URL/key/generate" \
-  -H "Authorization: Bearer $MASTER_KEY_REF" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "key_alias": "alice@company.com",
-    "user_id": "alice@company.com",
-    "models": ["gpt-5.5", "gpt-5.4"],
-    "max_budget": 50.0,
-    "budget_duration": "30d",
-    "tpm_limit": 100000,
-    "rpm_limit": 1000
-  }'
+# Add these to the gitignored deployment/litellm/.env.deploy file:
+CODEX_API_SECRET_ID=codex-litellm-gateway/alice-key
+CODEX_KEY_ALIAS=alice@company.com
+CODEX_KEY_USER_ID=alice@company.com
+CODEX_KEY_MODELS=gpt-5.5
+CODEX_KEY_MAX_BUDGET=50
+CODEX_KEY_BUDGET_DURATION=30d
+CODEX_KEY_TPM_LIMIT=100000
+CODEX_KEY_RPM_LIMIT=1000
 
-# Returns: {"key": "sk-litellm-..."}
+CONFIRM_AWS_WRITE=1 make litellm-provision-key
 ```
+
+The helper generates the key through the LiteLLM Admin API and writes it
+directly to a KMS-encrypted Secrets Manager secret. Neither the LiteLLM master
+key nor the generated key is printed.
 
 #### Option B: Self-Service OIDC
 
@@ -326,13 +334,14 @@ base_url = "<gateway-endpoint>"  # Paste the exact GatewayEndpoint value, includ
 wire_api = "responses"    # Optional but explicit; custom providers default to Responses
 
 [model_providers.litellm-gateway.auth]
-command = "/usr/bin/env"
-args = ["AWS_PROFILE=<developer-profile>", "AWS_REGION=<region>", "PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin", "<absolute-path-to-asm-exec>", "/usr/bin/printf", "%s\n", "<scoped-key-secrets-manager-reference>"]
+command = "<absolute-python3-path>"
+args = ["<absolute-repo-path>/deployment/scripts/aws-secret-auth.py", "--aws-cli", "<absolute-aws-cli-v2-path>", "--region", "<region>", "--secret-id", "<scoped-key-secret-id>", "--field", "LITELLM_API_KEY", "--profile", "<developer-profile>", "print-token"]
+timeout_ms = 30000
 refresh_interval_ms = 300000
 ```
 
 `make litellm-codex-config` prints this block with the deployed endpoint,
-resolver path, and scoped-key reference filled in. Bedrock Mantle serves GPT-5.x
+helper path, AWS CLI path, and scoped-key secret ID filled in. Bedrock Mantle serves GPT-5.x
 through the Responses API, so `wire_api = "responses"` is the right setting
 here. Keep this provider block in user-level `~/.codex/config.toml`; Codex
 ignores provider and auth settings in project-local `.codex/config.toml`.
@@ -364,29 +373,25 @@ and restore tests.
 ### Per-User Budgets
 
 ```bash
-asm-exec curl -X POST "$GATEWAY_ADMIN_URL/key/generate" \
-  -H "Authorization: Bearer $MASTER_KEY_REF" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "bob@company.com",
-    "max_budget": 100.0,
-    "budget_duration": "30d"
-  }'
+CODEX_API_SECRET_ID=codex-litellm-gateway/bob-key \
+CODEX_KEY_ALIAS=bob@company.com \
+CODEX_KEY_USER_ID=bob@company.com \
+CODEX_KEY_MAX_BUDGET=100 \
+CODEX_KEY_BUDGET_DURATION=30d \
+CONFIRM_AWS_WRITE=1 make litellm-provision-key
 ```
 
 ### Per-Team Budgets
 
 ```bash
-asm-exec curl -X POST "$GATEWAY_ADMIN_URL/key/generate" \
-  -H "Authorization: Bearer $MASTER_KEY_REF" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "team_id": "platform-team",
-    "max_budget": 500.0,
-    "budget_duration": "30d",
-    "tpm_limit": 100000,
-    "rpm_limit": 1000
-  }'
+CODEX_API_SECRET_ID=codex-litellm-gateway/platform-team-key \
+CODEX_KEY_ALIAS=platform-team \
+CODEX_KEY_TEAM_ID=platform-team \
+CODEX_KEY_MAX_BUDGET=500 \
+CODEX_KEY_BUDGET_DURATION=30d \
+CODEX_KEY_TPM_LIMIT=1000000 \
+CODEX_KEY_RPM_LIMIT=10000 \
+CONFIRM_AWS_WRITE=1 make litellm-provision-key
 ```
 
 ### Check Usage
@@ -551,25 +556,38 @@ For production settings and promotion gates, see
 
 ## Cleanup
 
+Preview the resources and retention behavior before deleting anything:
+
 ```bash
-# Delete gateway stack
-aws cloudformation delete-stack --stack-name "$GATEWAY_STACK" --region "$AWS_REGION"
-
-# Delete optional stacks
-aws cloudformation delete-stack --stack-name "$USERKEY_STACK" --region "$AWS_REGION"
-aws cloudformation delete-stack --stack-name "$OTEL_STACK" --region "$AWS_REGION"
-
-# Delete networking (wait for above to complete first)
-aws cloudformation wait stack-delete-complete --stack-name "$GATEWAY_STACK" --region "$AWS_REGION"
-aws cloudformation delete-stack --stack-name "$NETWORKING_STACK" --region "$AWS_REGION"
-
-# Delete ECR images
-aws ecr delete-repository --repository-name "$LITELLM_REPO" --region "$AWS_REGION" --force
-
-# Developers remove config
-# Delete litellm-gateway block from ~/.codex/config.toml
-# Delete the scoped key secret after revoking the matching LiteLLM virtual key
+make litellm-cleanup-plan
 ```
+
+Delete the gateway stack only after confirming its exact name:
+
+```bash
+CONFIRM_STACK_DELETE=codex-litellm-gateway make litellm-cleanup
+```
+
+To delete the sample networking stack in the same operation, opt in and
+confirm that stack separately:
+
+```bash
+CONFIRM_STACK_DELETE=codex-litellm-gateway \
+DELETE_NETWORKING=1 \
+CONFIRM_NETWORKING_DELETE=codex-networking \
+make litellm-cleanup
+```
+
+CloudFormation creates a final RDS snapshot and retains the KMS keys, Secrets
+Manager secrets, CloudWatch log group, and ALB log bucket. ECR images and the
+scoped Codex key secret also remain because they are outside the stack. Review
+and remove those resources under your organization's retention policy. A
+production stack with RDS deletion protection must first receive an approved
+stack update that disables deletion protection.
+
+Delete separately deployed optional OIDC and telemetry stacks only after
+checking that no other workload uses them. Developers should also remove the
+gateway provider block from `~/.codex/config.toml`.
 
 ---
 

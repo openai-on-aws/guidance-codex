@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import time
+from typing import Optional
 import urllib.error
 import urllib.request
 
@@ -18,12 +19,26 @@ def generate_key(
     master_key: str,
     key_alias: str,
     models: list[str],
+    *,
+    user_id: Optional[str] = None,
+    team_id: Optional[str] = None,
+    max_budget: Optional[float] = None,
+    budget_duration: Optional[str] = None,
+    tpm_limit: Optional[int] = None,
+    rpm_limit: Optional[int] = None,
 ) -> str:
+    key_options = {
+        "key_alias": key_alias,
+        "models": models,
+        "user_id": user_id,
+        "team_id": team_id,
+        "max_budget": max_budget,
+        "budget_duration": budget_duration,
+        "tpm_limit": tpm_limit,
+        "rpm_limit": rpm_limit,
+    }
     payload = json.dumps(
-        {
-            "key_alias": key_alias,
-            "models": models,
-        }
+        {key: value for key, value in key_options.items() if value is not None}
     ).encode()
     request = urllib.request.Request(
         f"{admin_url.rstrip('/')}/key/generate",
@@ -131,6 +146,12 @@ def main() -> int:
     parser.add_argument("--region", required=True)
     parser.add_argument("--key-alias", required=True)
     parser.add_argument("--models", default="gpt-5.5")
+    parser.add_argument("--user-id")
+    parser.add_argument("--team-id")
+    parser.add_argument("--max-budget", type=float)
+    parser.add_argument("--budget-duration")
+    parser.add_argument("--tpm-limit", type=int)
+    parser.add_argument("--rpm-limit", type=int)
     args = parser.parse_args()
 
     master_key = os.environ.get("LITELLM_MASTER_KEY")
@@ -148,7 +169,18 @@ def main() -> int:
         print(f"Scoped LiteLLM key secret already exists: {args.secret_id}")
         return 0
 
-    key = generate_key(args.admin_url, master_key, args.key_alias, models)
+    key = generate_key(
+        args.admin_url,
+        master_key,
+        args.key_alias,
+        models,
+        user_id=args.user_id,
+        team_id=args.team_id,
+        max_budget=args.max_budget,
+        budget_duration=args.budget_duration,
+        tpm_limit=args.tpm_limit,
+        rpm_limit=args.rpm_limit,
+    )
     store_key(
         aws_cli=args.aws_cli,
         region=args.region,

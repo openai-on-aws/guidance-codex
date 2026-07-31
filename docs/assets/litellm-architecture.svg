@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Codex request flow through LiteLLM on AWS</title>
+  <desc id="desc">Codex on a developer workstation sends Responses API requests through an Application Load Balancer and AWS WAF to LiteLLM on Amazon ECS Fargate, which invokes an approved model on Amazon Bedrock. PostgreSQL, Secrets Manager, KMS, and CloudWatch support the gateway.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#3f5f73"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#ff9900"/>
+    </marker>
+    <style>
+      .title { font: 700 42px Arial, sans-serif; fill: #17202a; }
+      .subtitle { font: 400 22px Arial, sans-serif; fill: #53616c; }
+      .box-title { font: 700 24px Arial, sans-serif; fill: #17202a; }
+      .box-copy { font: 400 18px Arial, sans-serif; fill: #53616c; }
+      .label { font: 700 18px Arial, sans-serif; fill: #344b5a; }
+      .flow-label { font: 700 16px Arial, sans-serif; fill: #344b5a; }
+      .step { font: 700 18px Arial, sans-serif; fill: #ffffff; }
+      .support-title { font: 700 20px Arial, sans-serif; fill: #17202a; }
+      .support-copy { font: 400 16px Arial, sans-serif; fill: #53616c; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" fill="#ffffff"/>
+  <text x="80" y="82" class="title">Codex through a customer-operated LiteLLM gateway on AWS</text>
+  <text x="80" y="122" class="subtitle">Central policy and telemetry for model turns; tools continue to run on the developer workstation</text>
+
+  <rect x="450" y="165" width="1090" height="610" rx="8" fill="#f7f8f8" stroke="#aab7bf" stroke-width="2"/>
+  <text x="480" y="204" class="label">Customer AWS account and VPC</text>
+
+  <rect x="75" y="265" width="300" height="230" rx="8" fill="#eef7fb" stroke="#2f7f9f" stroke-width="3"/>
+  <circle cx="125" cy="315" r="25" fill="#2f7f9f"/>
+  <path d="M113 315h24M125 303v24" stroke="#ffffff" stroke-width="4"/>
+  <text x="165" y="310" class="box-title">Developer</text>
+  <text x="165" y="340" class="box-title">workstation</text>
+  <text x="110" y="385" class="box-title">Codex</text>
+  <text x="110" y="420" class="box-copy">Reads and edits local files</text>
+  <text x="110" y="450" class="box-copy">Runs approved tools locally</text>
+  <text x="110" y="480" class="box-copy">Sends model turns via Responses API</text>
+
+  <rect x="520" y="280" width="250" height="200" rx="8" fill="#fff8eb" stroke="#ff9900" stroke-width="3"/>
+  <rect x="550" y="315" width="68" height="46" rx="6" fill="#ff9900"/>
+  <path d="M565 338h38" stroke="#ffffff" stroke-width="4"/>
+  <text x="645" y="345" text-anchor="middle" class="box-title">ALB + AWS WAF</text>
+  <text x="645" y="400" text-anchor="middle" class="box-copy">TLS termination</text>
+  <text x="645" y="430" text-anchor="middle" class="box-copy">CIDR and web filtering</text>
+
+  <rect x="865" y="250" width="330" height="260" rx="8" fill="#eef7fb" stroke="#2f7f9f" stroke-width="3"/>
+  <rect x="905" y="292" width="70" height="70" rx="6" fill="#2f7f9f"/>
+  <rect x="920" y="307" width="40" height="40" fill="none" stroke="#ffffff" stroke-width="4"/>
+  <text x="1000" y="320" class="box-title">LiteLLM</text>
+  <text x="1000" y="350" class="box-copy">Amazon ECS Fargate</text>
+  <text x="905" y="407" class="box-copy">Authenticates the caller</text>
+  <text x="905" y="437" class="box-copy">Applies model, budget, and rate policy</text>
+  <text x="905" y="467" class="box-copy">Routes and records each model turn</text>
+
+  <rect x="1300" y="280" width="200" height="200" rx="8" fill="#fff8eb" stroke="#ff9900" stroke-width="3"/>
+  <circle cx="1400" cy="335" r="38" fill="#ff9900"/>
+  <path d="M1378 335c12-24 32-24 44 0-12 24-32 24-44 0z" fill="none" stroke="#ffffff" stroke-width="4"/>
+  <text x="1400" y="410" text-anchor="middle" class="box-title">Amazon Bedrock</text>
+  <text x="1400" y="442" text-anchor="middle" class="box-copy">Approved model</text>
+
+  <line x1="375" y1="345" x2="510" y2="345" stroke="#3f5f73" stroke-width="5" marker-end="url(#arrow)"/>
+  <circle cx="440" cy="315" r="18" fill="#3f5f73"/><text x="440" y="321" text-anchor="middle" class="step">1</text>
+  <text x="440" y="385" text-anchor="middle" class="flow-label">POST /v1/responses</text>
+
+  <line x1="770" y1="345" x2="855" y2="345" stroke="#3f5f73" stroke-width="5" marker-end="url(#arrow)"/>
+  <circle cx="812" cy="315" r="18" fill="#3f5f73"/><text x="812" y="321" text-anchor="middle" class="step">2</text>
+
+  <line x1="1195" y1="345" x2="1290" y2="345" stroke="#ff9900" stroke-width="5" marker-end="url(#arrow-orange)"/>
+  <circle cx="1243" cy="315" r="18" fill="#ff9900"/><text x="1243" y="321" text-anchor="middle" class="step">3</text>
+
+  <path d="M1400 480 C1400 565 1100 560 1035 515" fill="none" stroke="#3f5f73" stroke-width="4" marker-end="url(#arrow)"/>
+  <circle cx="1250" cy="550" r="18" fill="#3f5f73"/><text x="1250" y="556" text-anchor="middle" class="step">4</text>
+  <text x="1250" y="590" text-anchor="middle" class="label">Text or function call</text>
+
+  <path d="M865 470 C730 610 420 610 300 505" fill="none" stroke="#3f5f73" stroke-width="4" stroke-dasharray="12 9" marker-end="url(#arrow)"/>
+  <circle cx="575" cy="585" r="18" fill="#3f5f73"/><text x="575" y="591" text-anchor="middle" class="step">5</text>
+  <text x="575" y="625" text-anchor="middle" class="label">Codex runs the tool and returns its result</text>
+
+  <rect x="535" y="660" width="270" height="90" rx="8" fill="#ffffff" stroke="#7b8b94" stroke-width="2"/>
+  <text x="560" y="695" class="support-title">RDS for PostgreSQL</text>
+  <text x="560" y="725" class="support-copy">Gateway state, spend, and budgets</text>
+
+  <rect x="845" y="660" width="300" height="90" rx="8" fill="#ffffff" stroke="#7b8b94" stroke-width="2"/>
+  <text x="870" y="695" class="support-title">Secrets Manager + KMS</text>
+  <text x="870" y="725" class="support-copy">Encrypted gateway and scoped keys</text>
+
+  <rect x="1185" y="660" width="290" height="90" rx="8" fill="#ffffff" stroke="#7b8b94" stroke-width="2"/>
+  <text x="1210" y="695" class="support-title">Amazon CloudWatch</text>
+  <text x="1210" y="725" class="support-copy">Logs, metrics, alarms, and operations</text>
+
+  <line x1="945" y1="510" x2="700" y2="650" stroke="#7b8b94" stroke-width="2" stroke-dasharray="7 7"/>
+  <line x1="1030" y1="510" x2="995" y2="650" stroke="#7b8b94" stroke-width="2" stroke-dasharray="7 7"/>
+  <line x1="1115" y1="510" x2="1330" y2="650" stroke="#7b8b94" stroke-width="2" stroke-dasharray="7 7"/>
+
+  <text x="80" y="845" class="subtitle">The gateway governs model access. Codex retains the local task loop, sandbox, and approval controls.</text>
+</svg>

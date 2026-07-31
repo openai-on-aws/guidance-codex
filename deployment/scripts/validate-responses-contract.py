@@ -182,7 +182,18 @@ def validate_stream(content_type: str, body: bytes) -> None:
             completed_response = payload.get("response")
             break
     if not isinstance(completed_response, dict):
-        raise RuntimeError("streaming response did not include response.completed")
+        observed = [
+            {
+                "event": event_name,
+                "type": payload.get("type"),
+                "keys": sorted(payload),
+            }
+            for event_name, payload in events
+        ]
+        raise RuntimeError(
+            "streaming response did not include response.completed; "
+            f"observed events: {observed}"
+        )
     if completed_response.get("status") != "completed":
         raise RuntimeError("streaming terminal response was not completed")
     validate_response(completed_response, "streaming request")

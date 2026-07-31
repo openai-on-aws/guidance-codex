@@ -12,6 +12,11 @@ from urllib.parse import unquote
 
 LINK_PATTERN = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 EXTERNAL_SCHEMES = ("http://", "https://", "mailto:", "tel:", "data:")
+IGNORED_PATH_PREFIXES = (
+    (".git",),
+    (".playwright-cli",),
+    ("output", "playwright"),
+)
 
 
 def local_target(raw_target: str) -> str | None:
@@ -35,7 +40,11 @@ def local_target(raw_target: str) -> str | None:
 def missing_links(repo_root: Path) -> list[str]:
     missing = []
     for source in sorted(repo_root.rglob("*.md")):
-        if ".git" in source.parts:
+        relative_source = source.relative_to(repo_root)
+        if any(
+            relative_source.parts[: len(prefix)] == prefix
+            for prefix in IGNORED_PATH_PREFIXES
+        ):
             continue
         text = source.read_text(encoding="utf-8")
         for line_number, line in enumerate(text.splitlines(), 1):
@@ -51,7 +60,6 @@ def missing_links(repo_root: Path) -> list[str]:
                 else:
                     candidate = source.parent / target
                 if not candidate.resolve().exists():
-                    relative_source = source.relative_to(repo_root)
                     missing.append(f"{relative_source}:{line_number}: {target}")
     return missing
 
