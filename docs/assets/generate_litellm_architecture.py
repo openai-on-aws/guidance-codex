@@ -154,10 +154,10 @@ def step_badge(x: int, y: int, number: int, *, color: str = "#146EB4") -> str:
 def legend_item(x: int, number: int, title: str, detail: str) -> str:
     return "\n".join(
         [
-            step_badge(x, 885, number, color="#232F3E"),
+            step_badge(x, 910, number, color="#232F3E"),
             text_lines(
                 x + 30,
-                878,
+                903,
                 [title],
                 size=15,
                 color="#161E2D",
@@ -166,7 +166,7 @@ def legend_item(x: int, number: int, title: str, detail: str) -> str:
             ),
             text_lines(
                 x + 30,
-                901,
+                926,
                 [detail],
                 size=13,
                 anchor="start",
@@ -237,24 +237,24 @@ def build_svg() -> str:
     supports = [
         support_card(
             430,
-            700,
-            330,
+            725,
+            340,
             [SecretsManager, KMS],
             "Secrets Manager + KMS",
             "Encrypted keys and credentials",
         ),
         support_card(
-            785,
-            700,
-            210,
+            795,
+            725,
+            220,
             [ECR],
             "Amazon ECR",
             "Digest-pinned image",
         ),
         support_card(
-            1020,
-            700,
-            260,
+            1040,
+            725,
+            270,
             [Cloudwatch],
             "Amazon CloudWatch",
             "Logs, metrics, and alarms",
@@ -263,7 +263,7 @@ def build_svg() -> str:
 
     return f"""<svg xmlns="http://www.w3.org/2000/svg"
   xmlns:xlink="http://www.w3.org/1999/xlink"
-  width="1600" height="960" viewBox="0 0 1600 960"
+  width="1600" height="980" viewBox="0 0 1600 980"
   role="img" aria-labelledby="title desc">
   <title id="title">Codex through a customer-operated LiteLLM gateway on AWS</title>
   <desc id="desc">Codex sends Responses API requests through AWS WAF and an Application Load Balancer to LiteLLM on Amazon ECS Fargate. LiteLLM applies identity and consumption policy before invoking an approved model on Amazon Bedrock. Amazon RDS for PostgreSQL, Secrets Manager, KMS, ECR, and CloudWatch support the gateway.</desc>
@@ -272,15 +272,23 @@ def build_svg() -> str:
       <path d="M0,0 L10,5 L0,10 z" fill="#146EB4"/>
     </marker>
     <marker id="arrow-muted" markerUnits="userSpaceOnUse"
-      markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-      <path d="M0,0 L8,4 L0,8 z" fill="#98A4AE"/>
+      markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 z" fill="#9AA8B5"/>
     </marker>
     <style>
       text {{ font-family: Arial, Helvetica, sans-serif; letter-spacing: 0; }}
+      .dependency {{
+        fill: none;
+        stroke: #9AA8B5;
+        stroke-width: 1.5;
+        stroke-dasharray: 5 6;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }}
     </style>
   </defs>
 
-  <rect width="1600" height="900" fill="#FFFFFF"/>
+  <rect width="1600" height="980" fill="#FFFFFF"/>
   <text x="55" y="62" font-size="36" font-weight="700" fill="#161E2D">
     Codex through a customer-operated LiteLLM gateway on AWS
   </text>
@@ -288,13 +296,13 @@ def build_svg() -> str:
     Central policy for model turns; local files, tools, sandboxing, and approvals remain on the developer workstation
   </text>
 
-  <rect x="45" y="155" width="300" height="470" rx="8"
+  <rect x="35" y="155" width="320" height="490" rx="8"
     fill="#F7F8F8" stroke="#7A8793" stroke-width="2"/>
-  <text x="68" y="190" font-size="18" font-weight="700" fill="#232F3E">
+  <text x="60" y="190" font-size="18" font-weight="700" fill="#232F3E">
     Developer environment
   </text>
 
-  <rect x="385" y="125" width="1165" height="710" rx="8"
+  <rect x="385" y="125" width="1165" height="730" rx="8"
     fill="#FAFAFA" stroke="#7A8793" stroke-width="2"/>
   <text x="410" y="163" font-size="19" font-weight="700" fill="#232F3E">
     Customer AWS account
@@ -315,12 +323,12 @@ def build_svg() -> str:
   {text_lines(950, 559, ["Private DB subnets"], size=13, anchor="start")}
   {text_lines(950, 581, ["State, usage, and budgets"], size=12, anchor="start")}
 
-  <rect x="79" y="480" width="246" height="118" rx="7"
+  <rect x="60" y="480" width="270" height="130" rx="7"
     fill="#FFFFFF" stroke="#146EB4" stroke-width="2"/>
-  {step_badge(105, 507, 5, color="#146EB4")}
-  {text_lines(137, 502, ["Local tool execution"], size=17, color="#161E2D", weight=700, anchor="start")}
-  {text_lines(103, 538, ["Codex runs approved commands", "on the workstation."], size=13, anchor="start", line_height=18)}
-  {text_lines(103, 579, ["The next model turn repeats steps 1-4."], size=13, anchor="start")}
+  {step_badge(86, 507, 5, color="#146EB4")}
+  {text_lines(118, 502, ["Local tool execution"], size=17, color="#161E2D", weight=700, anchor="start")}
+  {text_lines(84, 538, ["Codex runs approved commands", "on the workstation."], size=13, anchor="start", line_height=18)}
+  {text_lines(84, 581, ["The next model turn", "repeats steps 1-4."], size=12, anchor="start", line_height=17)}
 
   <path d="M312 340 H420" fill="none" stroke="#146EB4" stroke-width="4" marker-end="url(#arrow)"/>
   <path d="M580 340 H665" fill="none" stroke="#146EB4" stroke-width="4" marker-end="url(#arrow)"/>
@@ -331,24 +339,20 @@ def build_svg() -> str:
   {step_badge(885, 308, 3)}
   {step_badge(1192, 308, 4)}
 
-  <path d="M1025 440 V490" fill="none" stroke="#98A4AE" stroke-width="2"
-    stroke-dasharray="6 6" marker-end="url(#arrow-muted)"/>
+  <path class="dependency" d="M1025 440 V490" marker-end="url(#arrow-muted)"/>
 
-  <text x="430" y="674" font-size="14" font-weight="700" fill="#7A8793">
+  <text x="430" y="680" font-size="14" font-weight="700" fill="#7A8793">
     GATEWAY DEPENDENCIES
   </text>
-  <path d="M1120 425 H1208 Q1230 425 1230 447 V648 Q1230 670 1208 670 H595"
-    fill="none" stroke="#98A4AE" stroke-width="2" stroke-dasharray="6 6"/>
-  <path d="M595 670 V692" fill="none" stroke="#98A4AE" stroke-width="2"
-    marker-end="url(#arrow-muted)"/>
-  <path d="M890 670 V692" fill="none" stroke="#98A4AE" stroke-width="2"
-    marker-end="url(#arrow-muted)"/>
-  <path d="M1150 670 V692" fill="none" stroke="#98A4AE" stroke-width="2"
-    marker-end="url(#arrow-muted)"/>
+  <path class="dependency"
+    d="M1120 425 H1212 Q1240 425 1240 453 V667 Q1240 695 1212 695 H600"/>
+  <path class="dependency" d="M600 695 V717" marker-end="url(#arrow-muted)"/>
+  <path class="dependency" d="M905 695 V717" marker-end="url(#arrow-muted)"/>
+  <path class="dependency" d="M1175 695 V717" marker-end="url(#arrow-muted)"/>
 
   {"".join(supports)}
 
-  <text x="55" y="862" font-size="16" font-weight="700" fill="#5F6B7A">REQUEST FLOW</text>
+  <text x="55" y="887" font-size="16" font-weight="700" fill="#5F6B7A">REQUEST FLOW</text>
   {legend_item(85, 1, "Send request", "HTTPS /v1/responses")}
   {legend_item(360, 2, "Protect ingress", "Inspect and route")}
   {legend_item(650, 3, "Apply policy", "Identity, model, budget, rate")}
@@ -366,7 +370,7 @@ def main() -> None:
             "--width",
             "1600",
             "--height",
-            "960",
+            "980",
             "--output",
             str(PNG_PATH),
             str(SVG_PATH),
