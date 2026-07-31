@@ -115,6 +115,11 @@ def check_environment(
     cidr = environ.get("ALLOWED_CIDR", "") if stage == "deploy" else ""
     if cidr and not validate_cidr(cidr):
         errors.append("ALLOWED_CIDR must be a restricted IPv4 network")
+    if stage == "deploy":
+        for name in ("ADDITIONAL_ALLOWED_CIDR_1", "ADDITIONAL_ALLOWED_CIDR_2"):
+            additional_cidr = environ.get(name, "")
+            if additional_cidr and not validate_cidr(additional_cidr):
+                errors.append(f"{name} must be a restricted IPv4 network")
 
     certificate = (
         environ.get("ALB_CERTIFICATE_ARN", "") if stage == "deploy" else ""

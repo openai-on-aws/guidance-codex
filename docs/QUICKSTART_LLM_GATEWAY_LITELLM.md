@@ -93,6 +93,9 @@ export BEDROCK_REGION=us-east-1
 export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 export ECR_REGISTRY="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
 export ALLOWED_CIDR="$(curl -Ls https://checkip.amazonaws.com)/32"
+# Optional when browser, VPN, and terminal traffic use different egress IPs:
+# export ADDITIONAL_ALLOWED_CIDR_1=198.51.100.8/32
+# export ADDITIONAL_ALLOWED_CIDR_2=192.0.2.16/32
 export LITELLM_BASE_IMAGE=ghcr.io/berriai/litellm@sha256:65d84a2282137b4dc73bbe184650a7c807177c533e4223b3bfbc87963fe3fabe
 export GATEWAY_DOMAIN_NAME=gateway.example.com
 export ROUTE53_HOSTED_ZONE_ID=Z0123456789EXAMPLE
@@ -277,6 +280,14 @@ and optional WAF, but it does not encrypt client-to-ALB traffic. Use it only to
 capture a temporary walkthrough, then delete the stack. Staging and production
 must keep `EnableTls=true`.
 
+Managed browsers, VPNs, and terminal tools can use different egress paths even
+on the same workstation. If `curl` succeeds but a browser times out, compare
+the public IP reported from each client and use the two optional additional
+CIDR settings for exact `/32` entries. Do not broaden access to `0.0.0.0/0`.
+Some enterprise browser controls also block raw HTTP ALB URLs; use trusted DNS,
+ACM, and the HTTPS listener on port 443 for customer deployments. Never expose
+the ECS task port 4000 or PostgreSQL port 5432 publicly.
+
 The bundled LiteLLM image now uses LiteLLM's documented
 `bedrock_mantle/openai.gpt-5.x` provider and refreshes
 `AWS_BEARER_TOKEN_BEDROCK` in-process from the gateway task role using the
@@ -366,6 +377,27 @@ This validates Responses fields, continuation, SSE streaming, and a function
 tool call. It is a contract check, not a substitute for load, policy, rollback,
 and restore tests.
 
+### AWS WAF and Codex request bodies
+
+Codex sends instructions and tool schemas with Responses API calls. Even a
+short task can therefore produce a request body larger than the 8 KB body
+inspection limit for an Application Load Balancer web ACL. Without an
+exception, `AWSManagedRulesCommonRuleSet` blocks the request under
+`SizeRestrictions_BODY` before it reaches LiteLLM, so no request appears in the
+LiteLLM logs.
+
+The template keeps oversized bodies blocked by default and permits them only
+for the exact `POST /v1/responses` route. The managed
+`SizeRestrictions_BODY` action is changed to `Count`; all other rules in the
+managed rule group continue to enforce their normal actions. API-key
+authentication, restricted source CIDRs, the known-bad-inputs managed group,
+and the per-IP rate limit remain active.
+
+Treat this as a deliberate application compatibility setting, not a blanket
+WAF bypass. Monitor the count metric, test representative Codex requests, and
+apply an explicit gateway or reverse-proxy payload limit if your organization
+requires one below the Application Load Balancer service limit.
+
 ---
 
 ## Quota Management
@@ -435,6 +467,29 @@ aws cloudformation deploy \
   --parameter-overrides MetricsNamespace=Codex \
   --region "$AWS_REGION"
 ```
+
+### Generate LiteLLM request-log evidence
+
+Run one direct response and one read-only tool task through the configured
+gateway:
+
+```bash
+codex exec --sandbox read-only --ephemeral \
+  "Reply with exactly LITELLM_GATEWAY_OK."
+
+codex exec --sandbox read-only --ephemeral \
+  "Inspect README.md with shell tools and summarize the architecture. Do not modify files."
+```
+
+In the LiteLLM Admin UI, open **Logs** and sort by **Start Time** descending.
+Capture columns that demonstrate the control point: status, model group, key
+alias, tokens, latency, and spend. A tool-using Codex task normally creates
+multiple rows because Codex sends the local tool result through LiteLLM in the
+next Responses request.
+
+Do not include prompts, responses, raw API keys, or full request identifiers in
+published screenshots. Use a dedicated walkthrough key alias so the screenshot
+shows attribution without exposing a real employee identity.
 
 ---
 

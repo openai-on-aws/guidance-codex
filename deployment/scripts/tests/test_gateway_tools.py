@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
+REPO_ROOT = SCRIPTS_DIR.parents[1]
 
 
 def load_script(module_name, filename):
@@ -157,6 +158,44 @@ class TestLiteLLMPreflight(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(warnings, [])
 
+    def test_environment_accepts_restricted_additional_cidrs(self):
+        digest = "9" * 64
+        environ = {
+            "AWS_REGION": "us-east-1",
+            "BEDROCK_REGION": "us-east-1",
+            "ENABLE_TLS": "false",
+            "ALLOWED_CIDR": "203.0.113.4/32",
+            "ADDITIONAL_ALLOWED_CIDR_1": "198.51.100.8/32",
+            "ADDITIONAL_ALLOWED_CIDR_2": "192.0.2.16/32",
+            "LITELLM_BASE_IMAGE": f"ghcr.io/berriai/litellm@sha256:{digest}",
+            "LITELLM_IMAGE": (
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com/"
+                f"codex-litellm@sha256:{digest}"
+            ),
+        }
+        errors, _ = preflight.check_environment(environ, "deploy")
+        self.assertEqual(errors, [])
+
+    def test_environment_rejects_public_additional_cidr(self):
+        digest = "8" * 64
+        environ = {
+            "AWS_REGION": "us-east-1",
+            "BEDROCK_REGION": "us-east-1",
+            "ENABLE_TLS": "false",
+            "ALLOWED_CIDR": "203.0.113.4/32",
+            "ADDITIONAL_ALLOWED_CIDR_1": "0.0.0.0/0",
+            "LITELLM_BASE_IMAGE": f"ghcr.io/berriai/litellm@sha256:{digest}",
+            "LITELLM_IMAGE": (
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com/"
+                f"codex-litellm@sha256:{digest}"
+            ),
+        }
+        errors, _ = preflight.check_environment(environ, "deploy")
+        self.assertIn(
+            "ADDITIONAL_ALLOWED_CIDR_1 must be a restricted IPv4 network",
+            errors,
+        )
+
     def test_environment_accepts_managed_certificate_values(self):
         digest = "d" * 64
         environ = {
@@ -256,6 +295,19 @@ class TestLiteLLMPreflight(unittest.TestCase):
         )
         self.assertEqual(errors, [])
         self.assertEqual(warnings, [])
+
+
+class TestLiteLLMCloudFormation(unittest.TestCase):
+    def test_waf_allows_large_responses_payloads_only_on_codex_endpoint(self):
+        template = (
+            REPO_ROOT / "deployment/litellm/ecs/litellm-ecs.yaml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("Name: BlockOversizeBodiesExceptResponses", template)
+        self.assertIn("SearchString: /v1/responses", template)
+        self.assertIn("SearchString: POST", template)
+        self.assertIn("Name: SizeRestrictions_BODY", template)
+        self.assertIn("ActionToUse:\n                    Count: {}", template)
 
 
 class TestLiteLLMKeyProvisioning(unittest.TestCase):

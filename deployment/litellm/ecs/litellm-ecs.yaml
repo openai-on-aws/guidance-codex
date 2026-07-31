@@ -199,6 +199,16 @@ Parameters:
       Do NOT use 0.0.0.0/0 - AWS security scans will auto-delete the listener.
       For public access, deploy AWS WAF with rate limiting and IP reputation filtering.
 
+  AdditionalAllowedCidr1:
+    Type: String
+    Default: ""
+    Description: Optional second restricted IPv4 CIDR allowed to reach the ALB.
+
+  AdditionalAllowedCidr2:
+    Type: String
+    Default: ""
+    Description: Optional third restricted IPv4 CIDR allowed to reach the ALB.
+
   AlbCertificateArn:
     Type: String
     Default: ""
@@ -266,6 +276,10 @@ Rules:
     Assertions:
       - Assert: !Not [!Equals [!Ref AllowedCidr, "0.0.0.0/0"]]
         AssertDescription: AllowedCidr must not expose the gateway to the entire internet.
+      - Assert: !Not [!Equals [!Ref AdditionalAllowedCidr1, "0.0.0.0/0"]]
+        AssertDescription: AdditionalAllowedCidr1 must not expose the gateway to the entire internet.
+      - Assert: !Not [!Equals [!Ref AdditionalAllowedCidr2, "0.0.0.0/0"]]
+        AssertDescription: AdditionalAllowedCidr2 must not expose the gateway to the entire internet.
   TlsConfigurationComplete:
     RuleCondition: !Equals [!Ref EnableTls, "true"]
     Assertions:
@@ -315,13 +329,14 @@ Conditions:
   UseJwtMiddleware: !Equals [!Ref EnableJwtMiddleware, "true"]
   OtelEnabled: !Equals [!Ref EnableOtel, "true"]
   HasAlbDomainName: !Not [!Equals [!Ref AlbDomainName, ""]]
-  HasRoute53HostedZoneId: !Not [!Equals [!Ref Route53HostedZoneId, ""]]
   CreateDnsAlias: !And
     - !Equals [!Ref EnableTls, "true"]
     - !Not [!Equals [!Ref Route53HostedZoneId, ""]]
   HasTaskSubnetIds: !Not [!Equals [!Ref TaskSubnetIds, ""]]
   HasDatabaseSubnetIds: !Not [!Equals [!Ref DatabaseSubnetIds, ""]]
   HasAlbSubnetIds: !Not [!Equals [!Ref AlbSubnetIds, ""]]
+  HasAdditionalAllowedCidr1: !Not [!Equals [!Ref AdditionalAllowedCidr1, ""]]
+  HasAdditionalAllowedCidr2: !Not [!Equals [!Ref AdditionalAllowedCidr2, ""]]
   WafEnabled: !Equals [!Ref EnableWaf, "true"]
   HasAlarmTopic: !Not [!Equals [!Ref AlarmTopicArn, ""]]
 
@@ -513,6 +528,22 @@ Resources:
           ToPort: !If [TlsEnabled, 443, 80]
           CidrIp: !Ref AllowedCidr
           Description: Allow the configured gateway listener from the configured CIDR
+        - !If
+          - HasAdditionalAllowedCidr1
+          - IpProtocol: tcp
+            FromPort: !If [TlsEnabled, 443, 80]
+            ToPort: !If [TlsEnabled, 443, 80]
+            CidrIp: !Ref AdditionalAllowedCidr1
+            Description: Allow the configured gateway listener from additional CIDR 1
+          - !Ref AWS::NoValue
+        - !If
+          - HasAdditionalAllowedCidr2
+          - IpProtocol: tcp
+            FromPort: !If [TlsEnabled, 443, 80]
+            ToPort: !If [TlsEnabled, 443, 80]
+            CidrIp: !Ref AdditionalAllowedCidr2
+            Description: Allow the configured gateway listener from additional CIDR 2
+          - !Ref AWS::NoValue
       SecurityGroupEgress: []
 
   ALBLogsBucket:
@@ -1009,20 +1040,68 @@ Resources:
         MetricName: !Sub "${AWS::StackName}-gateway"
         SampledRequestsEnabled: true
       Rules:
-        - Name: AWSManagedCommon
+        # Codex Responses payloads include instructions and tool schemas and
+        # commonly exceed the 8 KB body inspection limit for ALB web ACLs.
+        # Preserve the managed size restriction everywhere except the exact
+        # Responses endpoint and method used by Codex.
+        - Name: BlockOversizeBodiesExceptResponses
           Priority: 0
+          Action:
+            Block: {}
+          Statement:
+            AndStatement:
+              Statements:
+                - NotStatement:
+                    Statement:
+                      AndStatement:
+                        Statements:
+                          - ByteMatchStatement:
+                              FieldToMatch:
+                                UriPath: {}
+                              PositionalConstraint: EXACTLY
+                              SearchString: /v1/responses
+                              TextTransformations:
+                                - Priority: 0
+                                  Type: NONE
+                          - ByteMatchStatement:
+                              FieldToMatch:
+                                Method: {}
+                              PositionalConstraint: EXACTLY
+                              SearchString: POST
+                              TextTransformations:
+                                - Priority: 0
+                                  Type: NONE
+                - SizeConstraintStatement:
+                    ComparisonOperator: GT
+                    FieldToMatch:
+                      Body:
+                        OversizeHandling: MATCH
+                    Size: 8192
+                    TextTransformations:
+                      - Priority: 0
+                        Type: NONE
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: BlockOversizeBodiesExceptResponses
+            SampledRequestsEnabled: true
+        - Name: AWSManagedCommon
+          Priority: 1
           OverrideAction:
             None: {}
           Statement:
             ManagedRuleGroupStatement:
               VendorName: AWS
               Name: AWSManagedRulesCommonRuleSet
+              RuleActionOverrides:
+                - Name: SizeRestrictions_BODY
+                  ActionToUse:
+                    Count: {}
           VisibilityConfig:
             CloudWatchMetricsEnabled: true
             MetricName: AWSManagedCommon
             SampledRequestsEnabled: true
         - Name: AWSManagedKnownBadInputs
-          Priority: 1
+          Priority: 2
           OverrideAction:
             None: {}
           Statement:
@@ -1034,7 +1113,7 @@ Resources:
             MetricName: AWSManagedKnownBadInputs
             SampledRequestsEnabled: true
         - Name: PerIpRateLimit
-          Priority: 2
+          Priority: 3
           Action:
             Block: {}
           Statement:

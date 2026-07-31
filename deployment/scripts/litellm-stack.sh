@@ -214,6 +214,12 @@ gateway_parameters() {
     "EnableTls=$ENABLE_TLS"
     "DBMultiAz=$DB_MULTI_AZ"
   )
+  if [[ -n "${ADDITIONAL_ALLOWED_CIDR_1:-}" ]]; then
+    GATEWAY_PARAMETERS+=("AdditionalAllowedCidr1=$ADDITIONAL_ALLOWED_CIDR_1")
+  fi
+  if [[ -n "${ADDITIONAL_ALLOWED_CIDR_2:-}" ]]; then
+    GATEWAY_PARAMETERS+=("AdditionalAllowedCidr2=$ADDITIONAL_ALLOWED_CIDR_2")
+  fi
   if [[ -n "${GATEWAY_DOMAIN_NAME:-}" ]]; then
     GATEWAY_PARAMETERS+=("AlbDomainName=$GATEWAY_DOMAIN_NAME")
   fi

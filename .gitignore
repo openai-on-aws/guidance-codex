@@ -23,3 +23,6 @@ __pycache__/
 # Local walkthrough screenshots, recordings, and browser traces
 /output/playwright/
 /.playwright-cli/
+
+# Local blog review exports (Word, PDF, and render QA)
+/output/blog/

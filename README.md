@@ -47,15 +47,44 @@ The value is the control point: developers retain the normal Codex experience,
 while the platform team gets centralized identity, model access, rate limits,
 budgets, and gateway telemetry.
 
-## Live Walkthrough
+![Codex request flow through LiteLLM on AWS](docs/assets/litellm-architecture.png)
+
+## Validated LiteLLM Walkthrough
 
 The LiteLLM reference was deployed and contract-tested in `us-east-1`. The
 walkthrough endpoint is CIDR-restricted and intentionally uses HTTP only;
-production defaults remain TLS and Multi-AZ.
+production defaults remain TLS and Multi-AZ. Follow the
+[LiteLLM quickstart](docs/QUICKSTART_LLM_GATEWAY_LITELLM.md) to reproduce the
+deployment and run the strict Responses API contract probe.
 
 ![Live LiteLLM API deployed on AWS](docs/assets/litellm-live-api.jpg)
 
+The health endpoint confirms that the proxy is reachable through the
+Application Load Balancer. The administration login is protected by the
+LiteLLM master credential:
+
 ![LiteLLM administration login](docs/assets/litellm-admin-login.jpg)
+
+The administration UI confirms that the stable gateway aliases map to the
+approved Amazon Bedrock models:
+
+![LiteLLM model aliases mapped to Amazon Bedrock models](docs/assets/litellm-model-endpoints.png)
+
+After `codex exec` validation, LiteLLM records each Responses API turn with its
+status, scoped key alias, model, cost, and latency. Tool-using tasks create
+multiple rows because Codex returns each local tool result through the gateway:
+
+![Successful Codex Responses requests in LiteLLM](docs/assets/litellm-codex-request-logs.png)
+
+The usage view aggregates request, token, and spend data by model and identity:
+
+![LiteLLM aggregate model usage dashboard](docs/assets/litellm-usage-dashboard.png)
+
+For a temporary HTTP walkthrough, browser and terminal traffic can leave
+through different public IP addresses. Keep each source restricted to an exact
+`/32`; do not expose the gateway to `0.0.0.0/0`. Customer deployments should
+use trusted DNS, ACM, HTTPS on port 443, private ECS and database subnets, and
+the production settings in the quickstart.
 
 ## Quick Start
 
