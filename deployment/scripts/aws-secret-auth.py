@@ -96,6 +96,9 @@ def main() -> int:
         profile=args.profile,
     )
     if args.action == "print-token":
+        # Codex consumes stdout as the credential-provider protocol response.
+        # This is not operational logging.
+        # lgtm[py/clear-text-logging-sensitive-data]
         sys.stdout.write(value + "\n")
         return 0
 

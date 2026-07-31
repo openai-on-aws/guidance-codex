@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -311,6 +312,24 @@ class TestLiteLLMCloudFormation(unittest.TestCase):
 
 
 class TestLiteLLMKeyProvisioning(unittest.TestCase):
+    @staticmethod
+    def args():
+        return SimpleNamespace(
+            admin_url="https://gateway.example.com",
+            secret_id="gateway/codex-key",
+            kms_key_id="arn:aws:kms:us-east-1:123456789012:key/example",
+            aws_cli="/usr/local/bin/aws",
+            region="us-east-1",
+            key_alias="codex-walkthrough",
+            models="gpt-5.5",
+            user_id=None,
+            team_id=None,
+            max_budget=None,
+            budget_duration=None,
+            tpm_limit=None,
+            rpm_limit=None,
+        )
+
     def test_secret_is_passed_to_aws_over_stdin(self):
         result = type("Result", (), {"returncode": 0, "stdout": "{}", "stderr": ""})()
         with patch.object(provision_key, "run_aws", return_value=result) as run_aws:
@@ -339,6 +358,42 @@ class TestLiteLLMKeyProvisioning(unittest.TestCase):
                     secret_id="gateway/codex-key",
                 )
             )
+
+    def test_status_does_not_print_existing_secret_identifier(self):
+        with (
+            patch.object(
+                provision_key.argparse.ArgumentParser,
+                "parse_args",
+                return_value=self.args(),
+            ),
+            patch.object(provision_key, "secret_exists", return_value=True),
+            patch.object(provision_key, "print", create=True) as output,
+            patch.dict(
+                provision_key.os.environ,
+                {"LITELLM_MASTER_KEY": "master-key"},
+            ),
+        ):
+            self.assertEqual(provision_key.main(), 0)
+        output.assert_called_once_with("Scoped LiteLLM key secret already exists.")
+
+    def test_status_does_not_print_stored_secret_identifier(self):
+        with (
+            patch.object(
+                provision_key.argparse.ArgumentParser,
+                "parse_args",
+                return_value=self.args(),
+            ),
+            patch.object(provision_key, "secret_exists", return_value=False),
+            patch.object(provision_key, "generate_key", return_value="scoped-key"),
+            patch.object(provision_key, "store_key"),
+            patch.object(provision_key, "print", create=True) as output,
+            patch.dict(
+                provision_key.os.environ,
+                {"LITELLM_MASTER_KEY": "master-key"},
+            ),
+        ):
+            self.assertEqual(provision_key.main(), 0)
+        output.assert_called_once_with("Stored scoped LiteLLM key in Secrets Manager.")
 
 
 class TestAwsSecretAuth(unittest.TestCase):
@@ -382,6 +437,27 @@ class TestAwsSecretAuth(unittest.TestCase):
                     secret_id="gateway/codex-key",
                     field="LITELLM_API_KEY",
                 )
+
+    def test_print_token_writes_only_credential_protocol_response(self):
+        args = SimpleNamespace(
+            aws_cli="/usr/local/bin/aws",
+            region="us-east-1",
+            secret_id="gateway/codex-key",
+            field="LITELLM_API_KEY",
+            profile="codex-developer",
+            action="print-token",
+        )
+        with (
+            patch.object(secret_auth, "parse_args", return_value=args),
+            patch.object(
+                secret_auth,
+                "resolve_secret_field",
+                return_value="credential-value",
+            ),
+            patch.object(secret_auth.sys.stdout, "write") as output,
+        ):
+            self.assertEqual(secret_auth.main(), 0)
+        output.assert_called_once_with("credential-value\n")
 
 
 class TestDocumentationLinks(unittest.TestCase):

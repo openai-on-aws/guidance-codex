@@ -166,7 +166,7 @@ def main() -> int:
         region=args.region,
         secret_id=args.secret_id,
     ):
-        print(f"Scoped LiteLLM key secret already exists: {args.secret_id}")
+        print("Scoped LiteLLM key secret already exists.")
         return 0
 
     key = generate_key(
@@ -188,7 +188,7 @@ def main() -> int:
         kms_key_id=args.kms_key_id,
         key=key,
     )
-    print(f"Stored scoped LiteLLM key in Secrets Manager: {args.secret_id}")
+    print("Stored scoped LiteLLM key in Secrets Manager.")
     return 0
 
 
