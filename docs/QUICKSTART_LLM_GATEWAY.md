@@ -42,7 +42,7 @@ must preserve the Responses API behavior listed below.
 | Gateway | Implementation Guide | Best For |
 |---------|---------------------|----------|
 | **LiteLLM** | [QUICKSTART_LLM_GATEWAY_LITELLM.md](QUICKSTART_LLM_GATEWAY_LITELLM.md) | Primary enterprise walkthrough for centralized controls |
-| **Portkey** | [QUICKSTART_LLM_GATEWAY_PORTKEY.md](QUICKSTART_LLM_GATEWAY_PORTKEY.md) | Managed or hybrid gateway evaluation |
+| **Portkey** | [QUICKSTART_LLM_GATEWAY_PORTKEY.md](QUICKSTART_LLM_GATEWAY_PORTKEY.md) | Hosted Bedrock Mantle evaluation |
 | **Cross-gateway decision** | [ENTERPRISE_GATEWAY_GUIDANCE.md](ENTERPRISE_GATEWAY_GUIDANCE.md) | Platform teams comparing controls and contract evidence |
 
 **Deployment:** ECS Fargate + Amazon RDS for PostgreSQL  
@@ -116,7 +116,7 @@ gateway path.)
 
 Follow your chosen gateway's implementation guide:
 - **LiteLLM**: Build Docker image → push to ECR → deploy ECS stack
-- **Portkey**: Create a workspace key -> configure a Model Catalog Bedrock integration -> run the strict contract probe
+- **Portkey**: Deploy the scoped assumed role -> configure a Model Catalog Bedrock Mantle provider -> run the strict contract and Codex probes
 - **Kong**: Deploy gateway → configure Bedrock upstream → enable plugins
 - **Bifrost**: Deploy to ECS/EKS → configure config.yaml → point at Bedrock
 - **Helicone**: Sign up → configure proxy → add Bedrock as provider

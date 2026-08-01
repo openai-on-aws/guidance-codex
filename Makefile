@@ -6,7 +6,10 @@ IDC_SCRIPT := deployment/scripts/idc-stack.sh
 .PHONY: help litellm-check litellm-build litellm-plan litellm-deploy \
 	litellm-status litellm-provision-key litellm-codex-config litellm-validate \
 	litellm-cleanup-plan litellm-cleanup \
-	portkey-check portkey-codex-config portkey-validate \
+	portkey-aws-check portkey-aws-plan portkey-aws-deploy portkey-aws-status \
+	portkey-aws-cleanup-plan portkey-aws-cleanup portkey-check \
+	portkey-codex-config portkey-validate portkey-codex-validate \
+	portkey-auth-negative \
 	idc-check idc-plan idc-deploy idc-provision idc-status idc-client-config \
 	idc-validate
 
@@ -19,8 +22,10 @@ help:
 		'  make litellm-status litellm-provision-key litellm-codex-config litellm-validate' \
 		'  make litellm-cleanup-plan litellm-cleanup' \
 		'' \
-		'Portkey evaluation:' \
-		'  make portkey-check portkey-codex-config portkey-validate' \
+		'Portkey hosted Bedrock Mantle evaluation:' \
+		'  make portkey-aws-check portkey-aws-plan portkey-aws-deploy portkey-aws-status' \
+		'  make portkey-check portkey-codex-config portkey-validate portkey-codex-validate' \
+		'  make portkey-auth-negative portkey-aws-cleanup-plan portkey-aws-cleanup' \
 		'' \
 		'IAM Identity Center:' \
 		'  make idc-check idc-plan idc-deploy idc-provision idc-status' \
@@ -56,6 +61,24 @@ litellm-cleanup-plan:
 litellm-cleanup:
 	@$(LITELLM_SCRIPT) cleanup
 
+portkey-aws-check:
+	@$(PORTKEY_SCRIPT) aws-check
+
+portkey-aws-plan:
+	@$(PORTKEY_SCRIPT) plan
+
+portkey-aws-deploy:
+	@$(PORTKEY_SCRIPT) deploy
+
+portkey-aws-status:
+	@$(PORTKEY_SCRIPT) status
+
+portkey-aws-cleanup-plan:
+	@$(PORTKEY_SCRIPT) cleanup-plan
+
+portkey-aws-cleanup:
+	@$(PORTKEY_SCRIPT) cleanup
+
 portkey-check:
 	@$(PORTKEY_SCRIPT) check
 
@@ -64,6 +87,12 @@ portkey-codex-config:
 
 portkey-validate:
 	@$(PORTKEY_SCRIPT) validate
+
+portkey-codex-validate:
+	@$(PORTKEY_SCRIPT) codex-validate
+
+portkey-auth-negative:
+	@$(PORTKEY_SCRIPT) auth-negative
 
 idc-check:
 	@$(IDC_SCRIPT) check

@@ -1,9 +1,13 @@
 import importlib.util
+import io
+import os
 from pathlib import Path
+import subprocess
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+import urllib.error
+from unittest.mock import MagicMock, patch
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
@@ -55,6 +59,49 @@ class TestResponsesContract(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "previous_response_id"):
             contract.validate_continuation(response, "different")
 
+    def test_expected_model_requires_exact_upstream_id(self):
+        contract.validate_expected_model(
+            "@bedrock-mantle-validation/openai.gpt-5.5",
+            "openai.gpt-5.5",
+        )
+        with self.assertRaisesRegex(RuntimeError, "must resolve"):
+            contract.validate_expected_model(
+                "@bedrock-mantle-validation/openai.gpt-5.4",
+                "openai.gpt-5.5",
+            )
+
+    def test_validate_reasoning_requires_reasoning_item(self):
+        contract.validate_reasoning({"output": [{"type": "reasoning"}]})
+        with self.assertRaisesRegex(RuntimeError, "reasoning output item"):
+            contract.validate_reasoning({"output": [{"type": "message"}]})
+
+    def test_require_listed_model_requires_exact_provider_model(self):
+        response = MagicMock()
+        response.read.return_value = b'{"data":[{"id":"@mantle/openai.gpt-5.5"}]}'
+        response.__enter__.return_value = response
+        with patch.object(contract.urllib.request, "urlopen", return_value=response):
+            contract.require_listed_model(
+                "https://api.portkey.ai/v1",
+                {"x-portkey-api-key": "secret"},
+                "@mantle/openai.gpt-5.5",
+                10,
+            )
+
+    def test_require_listed_model_rejects_missing_model(self):
+        response = MagicMock()
+        response.read.return_value = b'{"data":[{"id":"@mantle/openai.gpt-5.4"}]}'
+        response.__enter__.return_value = response
+        with (
+            patch.object(contract.urllib.request, "urlopen", return_value=response),
+            self.assertRaisesRegex(RuntimeError, "does not expose"),
+        ):
+            contract.require_listed_model(
+                "https://api.portkey.ai/v1",
+                {"x-portkey-api-key": "secret"},
+                "@mantle/openai.gpt-5.5",
+                10,
+            )
+
     def test_validate_stream_accepts_completed_responses_stream(self):
         body = (
             b"event: response.created\n"
@@ -72,6 +119,83 @@ class TestResponsesContract(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "response.completed"):
             contract.validate_stream("text/event-stream", body)
+
+    def test_validate_stream_rejects_malformed_event_json(self):
+        with self.assertRaisesRegex(RuntimeError, "invalid JSON"):
+            contract.validate_stream("text/event-stream", b"data: {broken}\n\n")
+
+    def test_validate_tool_call_rejects_missing_forced_tool(self):
+        with self.assertRaisesRegex(RuntimeError, "get_contract_value"):
+            contract.validate_tool_call({"output": []}, "get_contract_value")
+
+    def test_send_request_reports_authorization_failure(self):
+        error = urllib.error.HTTPError(
+            "https://gateway.example/v1/responses",
+            401,
+            "Unauthorized",
+            {},
+            io.BytesIO(b'{"error":"unauthorized"}'),
+        )
+        with (
+            patch.object(contract.urllib.request, "urlopen", side_effect=error),
+            self.assertRaisesRegex(RuntimeError, "HTTP 401"),
+        ):
+            contract.send_request(
+                "https://gateway.example/v1",
+                {"Authorization": "Bearer secret"},
+                {"model": "test"},
+                10,
+            )
+
+
+class TestPortkeyDeployment(unittest.TestCase):
+    def portkey_environment(self):
+        return {
+            **os.environ,
+            "PORTKEY_ENV_FILE": str(REPO_ROOT / "does-not-exist"),
+            "PORTKEY_BASE_URL": "https://api.portkey.ai/v1",
+            "PORTKEY_PROVIDER_SLUG": "bedrock-mantle-validation",
+            "PORTKEY_MODEL": "@bedrock-mantle-validation/openai.gpt-5.5",
+            "PORTKEY_API_KEY": "do-not-print-this-secret",
+        }
+
+    def test_portkey_check_and_config_do_not_print_secret(self):
+        script = SCRIPTS_DIR / "portkey-stack.sh"
+        for command in ("check", "codex-config"):
+            result = subprocess.run(
+                ["bash", str(script), command],
+                cwd=REPO_ROOT,
+                env=self.portkey_environment(),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("do-not-print-this-secret", result.stdout + result.stderr)
+
+    def test_portkey_check_rejects_model_fallback(self):
+        environ = self.portkey_environment()
+        environ["PORTKEY_MODEL"] = "@bedrock-mantle-validation/openai.gpt-5.4"
+        result = subprocess.run(
+            ["bash", str(SCRIPTS_DIR / "portkey-stack.sh"), "check"],
+            cwd=REPO_ROOT,
+            env=environ,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("openai.gpt-5.5", result.stderr)
+        self.assertNotIn("do-not-print-this-secret", result.stdout + result.stderr)
+
+    def test_portkey_role_requires_external_id_and_scopes_mantle(self):
+        template = (
+            REPO_ROOT / "deployment" / "portkey" / "bedrock-mantle-role.yaml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("sts:ExternalId: !Ref ExternalId", template)
+        self.assertIn("bedrock-mantle:Model: !Ref MantleModelId", template)
+        self.assertIn("bedrock-mantle:CreateInference", template)
+        self.assertNotIn("bedrock:InvokeModel", template)
 
 
 class TestLiteLLMPreflight(unittest.TestCase):

@@ -52,6 +52,7 @@ jobs:
           deployment/infrastructure/bedrock-auth-idc.yaml
           deployment/litellm/ecs/litellm-ecs.yaml
           deployment/litellm/ecs/user-key-mapping.yaml
+          deployment/portkey/bedrock-mantle-role.yaml
           --ignore-checks W6001
 
       - name: Validate shell syntax

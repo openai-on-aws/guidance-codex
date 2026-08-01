@@ -9,6 +9,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -89,6 +90,42 @@ def send_response(
         raise RuntimeError("gateway did not return a JSON response") from error
 
 
+def require_listed_model(
+    base_url: str,
+    headers: dict[str, str],
+    model: str,
+    timeout: int,
+) -> None:
+    provider = model.split("/", 1)[0].lstrip("@") if "/" in model else ""
+    query = urllib.parse.urlencode({"provider": provider, "limit": 100})
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}/models?{query}",
+        headers=headers,
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read()
+    except urllib.error.HTTPError as error:
+        error.read()
+        raise RuntimeError(
+            f"model catalog returned HTTP {error.code}"
+        ) from error
+    except urllib.error.URLError as error:
+        raise RuntimeError(f"model catalog request failed: {error.reason}") from error
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("model catalog did not return JSON") from error
+    listed = {
+        item.get("id")
+        for item in payload.get("data", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    if model not in listed:
+        raise RuntimeError(f"model catalog does not expose required model {model!r}")
+
+
 def parse_sse(body: bytes) -> list[tuple[str | None, dict]]:
     try:
         text = body.decode("utf-8")
@@ -164,6 +201,22 @@ def validate_continuation(response: dict, expected_text: str) -> None:
         raise RuntimeError(
             "continuation request did not recall state from previous_response_id"
         )
+
+
+def validate_expected_model(model: str, expected_model: str) -> None:
+    upstream_model = model.rsplit("/", 1)[-1]
+    if upstream_model != expected_model:
+        raise RuntimeError(
+            f"configured model must resolve to {expected_model!r}; got {model!r}"
+        )
+
+
+def validate_reasoning(response: dict) -> None:
+    reasoning_items = [
+        item for item in response.get("output", []) if item.get("type") == "reasoning"
+    ]
+    if not reasoning_items:
+        raise RuntimeError("response did not include a reasoning output item")
 
 
 def validate_stream(content_type: str, body: bytes) -> None:
@@ -245,6 +298,20 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Also require a Responses function-tool call.",
     )
+    parser.add_argument(
+        "--expected-model",
+        help="Require the configured model to resolve to this exact upstream model ID.",
+    )
+    parser.add_argument(
+        "--require-reasoning",
+        action="store_true",
+        help="Require the initial response to include a reasoning output item.",
+    )
+    parser.add_argument(
+        "--require-model-listed",
+        action="store_true",
+        help="Require GET /models to expose the exact configured model.",
+    )
     args = parser.parse_args()
     if not args.base_url:
         parser.error("--base-url is required")
@@ -261,6 +328,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.expected_model:
+        validate_expected_model(args.model, args.expected_model)
+    if args.require_model_listed:
+        require_listed_model(args.base_url, args.headers, args.model, args.timeout)
     continuation_value = "CODEX_GATEWAY_7F3A"
     first = send_response(
         args.base_url,
@@ -279,6 +350,8 @@ def main() -> int:
         args.timeout,
     )
     first_id = validate_response(first, "initial request")
+    if args.require_reasoning:
+        validate_reasoning(first)
 
     follow_up = send_response(
         args.base_url,
@@ -297,6 +370,12 @@ def main() -> int:
     validate_continuation(follow_up, continuation_value)
 
     checks = ["fields", "response shape", "continuation"]
+    if args.require_model_listed:
+        checks.append("model catalog")
+    if args.expected_model:
+        checks.append(f"model {args.expected_model}")
+    if args.require_reasoning:
+        checks.append("reasoning")
     if not args.skip_streaming:
         stream_headers = {**args.headers, "Accept": "text/event-stream"}
         content_type, body = send_request(

@@ -39,8 +39,8 @@ customer's retention policy.
 
 | Capability | LiteLLM reference | Portkey evaluation |
 |------------|-------------------|--------------------|
-| Responses endpoint | Live contract probe passed in `us-east-1` | Documented by Portkey; strict live probe requires a workspace key |
-| Bedrock Mantle GPT-5.x | Configured with `bedrock_mantle/` and server-side token refresh | Not verified by this repository; do not infer Mantle support from classic Bedrock support |
+| Responses endpoint | Live contract probe passed in `us-east-1` | Portkey documents `/v1/responses`; strict live probe still requires a workspace key |
+| Bedrock Mantle GPT-5.x | Configured with `bedrock_mantle/` and server-side token refresh | Dedicated `bedrock-mantle` provider and scoped IAM role are executable; live workspace evidence is pending |
 | Classic Bedrock assumed role | ECS task role | Documented Portkey integration pattern |
 | OIDC/JWT | Included middleware; compare licensed LiteLLM features against current vendor terms | Verify Portkey workspace/service-account controls for the selected tier |
 | Per-user/team budgets | Vendor documented; prove blocking with customer policy | Vendor documented; prove blocking with customer policy |
@@ -96,17 +96,16 @@ hybrid deployment and wants vendor-provided policy, analytics, and virtual-key
 workflows.
 
 Start with a non-production workspace and one test identity. Portkey's current
-Model Catalog replaces the older virtual-key-first flow. Configure an AWS
-role with an external ID and only the provider actions and resources required
-by the selected route. Portkey's classic Bedrock assumed-role guidance is not
-evidence that Bedrock Mantle's Responses endpoint is supported. Require Portkey
-to identify the exact upstream API, IAM actions, region, model identifier,
-credential refresh behavior, and data path in the customer design.
+Model Catalog replaces the older virtual-key-first flow. Select the dedicated
+**Bedrock Mantle** provider with assumed-role authentication; classic
+**Bedrock** uses Converse/Invoke and its Responses adapter does not provide
+stateful `previous_response_id`. The repository CloudFormation path requires
+an external ID and limits access to `openai.gpt-5.5` in `us-east-1`.
 
 A Portkey evaluation can use Codex custom-provider bearer authentication:
 
 ```toml
-model = "<portkey-model-alias>"
+model = "@bedrock-mantle-validation/openai.gpt-5.5"
 model_provider = "portkey"
 
 [model_providers.portkey]
@@ -126,17 +125,22 @@ values in command-line arguments:
 ```bash
 export GATEWAY_BASE_URL=https://api.portkey.ai/v1
 export PORTKEY_API_KEY=<secret>
-export GATEWAY_MODEL=@<provider-slug>/<model-id>
+export GATEWAY_MODEL=@<bedrock-mantle-provider-slug>/openai.gpt-5.5
 
 python3 deployment/scripts/validate-responses-contract.py \
   --api-key-env PORTKEY_API_KEY \
+  --header-env x-portkey-api-key=PORTKEY_API_KEY \
+  --expected-model openai.gpt-5.5 \
+  --require-model-listed \
+  --require-reasoning \
   --include-tool-call
 ```
 
 Portkey documents `previous_response_id` as unavailable for adapter providers,
-including classic Bedrock. The repository probe checks that continuation is
-semantic, so an ignored continuation ID cannot produce a false pass. See the
-[Portkey Quick Start](QUICKSTART_LLM_GATEWAY_PORTKEY.md).
+including classic Bedrock. Bedrock Mantle instead exposes the native Responses
+API and AWS documents stored continuation. The repository probe checks that
+continuation is semantic, so a misconfigured classic adapter cannot produce a
+false pass. See the [Portkey Quick Start](QUICKSTART_LLM_GATEWAY_PORTKEY.md).
 
 Do not mark the Portkey route production-ready until the contract probe passes
 with the intended Bedrock GPT-5.x model and the following evidence is captured:

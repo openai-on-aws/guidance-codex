@@ -1,0 +1,93 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  IAM role for a hosted Portkey Bedrock Mantle provider. The role is restricted
+  to one region and model and requires a caller-specific external ID.
+
+Parameters:
+  PortkeyPrincipalArn:
+    Type: String
+    Description: AWS principal ARN supplied by Portkey for the hosted gateway.
+    AllowedPattern: '^arn:(aws|aws-us-gov):iam::[0-9]{12}:(role|root)(/.*)?$'
+  ExternalId:
+    Type: String
+    NoEcho: true
+    MinLength: 16
+    MaxLength: 1224
+    AllowedPattern: '^[A-Za-z0-9+=,.@:/_-]+$'
+    Description: Unique external ID generated for this Portkey provider.
+  AwsRegion:
+    Type: String
+    Default: us-east-1
+    AllowedValues:
+      - us-east-1
+    Description: Fixed validation region for the Portkey walkthrough.
+  MantleModelId:
+    Type: String
+    Default: openai.gpt-5.5
+    AllowedValues:
+      - openai.gpt-5.5
+    Description: Only model the role may invoke.
+  MantleProjectId:
+    Type: String
+    Default: '*'
+    AllowedPattern: '^(\*|proj_[A-Za-z0-9_-]+)$'
+    Description: >-
+      Mantle project ID. Use * for initial discovery, then redeploy with the
+      project ID observed in CloudTrail.
+
+Resources:
+  PortkeyBedrockMantleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Hosted Portkey access to one Bedrock Mantle model.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PortkeyAssumeRoleWithExternalId
+            Effect: Allow
+            Principal:
+              AWS: !Ref PortkeyPrincipalArn
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref ExternalId
+      Policies:
+        - PolicyName: BedrockMantleModelAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: InvokeApprovedModel
+                Effect: Allow
+                Action:
+                  - bedrock-mantle:CreateInference
+                Resource: !Sub >-
+                  arn:${AWS::Partition}:bedrock-mantle:${AwsRegion}:${AWS::AccountId}:project/${MantleProjectId}
+                Condition:
+                  StringEquals:
+                    bedrock-mantle:Model: !Ref MantleModelId
+              - Sid: ReadApprovedProjectResponses
+                Effect: Allow
+                Action:
+                  - bedrock-mantle:GetInference
+                  - bedrock-mantle:CancelInference
+                  - bedrock-mantle:GetProject
+                  - bedrock-mantle:ListModels
+                Resource: !Sub >-
+                  arn:${AWS::Partition}:bedrock-mantle:${AwsRegion}:${AWS::AccountId}:project/${MantleProjectId}
+      Tags:
+        - Key: Application
+          Value: guidance-codex-portkey
+        - Key: Environment
+          Value: evaluation
+
+Outputs:
+  PortkeyRoleArn:
+    Description: Enter this role ARN in the Portkey Bedrock Mantle provider.
+    Value: !GetAtt PortkeyBedrockMantleRole.Arn
+  AwsRegion:
+    Value: !Ref AwsRegion
+  MantleModelId:
+    Value: !Ref MantleModelId
+  MantleProjectScope:
+    Value: !Sub >-
+      arn:${AWS::Partition}:bedrock-mantle:${AwsRegion}:${AWS::AccountId}:project/${MantleProjectId}
