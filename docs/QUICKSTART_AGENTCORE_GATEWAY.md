@@ -423,7 +423,6 @@ model_provider = "amazon-bedrock"
 
 [model_providers.amazon-bedrock.aws]
 region = "us-east-1"
-wire_api = "responses"
 
 # --- web search MCP tool ---
 approval_policy = "never"

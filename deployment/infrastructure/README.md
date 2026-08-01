@@ -20,7 +20,7 @@ Pick exactly one per deployment.
 
 | Template                          | Purpose                                                                |
 | --------------------------------- | ---------------------------------------------------------------------- |
-| `bedrock-auth-idc.yaml`           | IAM Identity Center role chained from `AWSReservedSSO_*` Permission Sets. |
+| `bedrock-auth-idc.yaml`           | Customer-managed Bedrock policy for direct Identity Center permission-set attachment; optional chained role. |
 | `bedrock-auth-cognito-pool.yaml`  | Cognito User Pool federated through a Cognito Identity Pool.           |
 | `bedrock-auth-okta.yaml`          | Okta OIDC provider federated through a Cognito Identity Pool.          |
 | `bedrock-auth-azure.yaml`         | Azure AD (Entra ID) OIDC provider federated through a Cognito Identity Pool. |
@@ -99,11 +99,13 @@ the full set, including `AllowedPattern` and default values.
 
 | Parameter                    | Type               | Default                   | Notes |
 | ---------------------------- | ------------------ | ------------------------- | ----- |
-| `RoleName`                   | String             | `CodexBedrockIdCRole`     | Name of the chained IAM role. |
+| `CreateChainedRole`          | String             | `false`                   | Recommended direct path leaves this false. |
+| `RoleName`                   | String             | `CodexBedrockIdCRole`     | Name of the optional chained IAM role. |
 | `PolicyName`                 | String             | `CodexBedrockInvokePolicy`| Customer-managed policy name. |
 | `PermissionSetNamePattern`   | String             | `CodexBedrockUser_*`      | Glob matched against `AWSReservedSSO_<PermissionSetName>_<hash>`. |
 | `AllowedBedrockRegions`      | CommaDelimitedList | `us-east-1,us-west-2`     | Regions where `bedrock:InvokeModel*` is allowed. |
-| `AllowedModelIdPattern`      | String             | `*`                       | Bedrock model ID glob (e.g. `openai.gpt-5-4*`). |
+| `AllowedModelIdPattern`      | String             | `*`                       | Bedrock model ID glob (e.g. `openai.gpt-5.*`). |
+| `MantleProjectId`            | String             | `default`                 | Mantle project allowed for Responses inference. |
 | `MaxSessionDurationSeconds`  | Number             | `28800`                   | 3600–43200; raise for long Codex runs. |
 
 Outputs: `RoleArn` (exported as `${StackName}-RoleArn`), `RoleName`,
@@ -113,9 +115,17 @@ Outputs: `RoleArn` (exported as `${StackName}-RoleArn`), `RoleName`,
 
 | Parameter              | Type   | Default        | Notes |
 | ---------------------- | ------ | -------------- | ----- |
+| `ExistingVpcId`        | String | `''`           | Existing VPC to export instead of creating one. |
+| `ExistingPublicSubnet1`| String | `''`           | Existing public subnet in the first AZ. |
+| `ExistingPublicSubnet2`| String | `''`           | Existing public subnet in a different AZ. |
 | `VpcCidr`              | String | `10.0.0.0/16`  | VPC CIDR. |
 | `PublicSubnet1Cidr`    | String | `10.0.1.0/24`  | First public subnet. |
 | `PublicSubnet2Cidr`    | String | `10.0.2.0/24`  | Second public subnet. |
+
+Supply all three `Existing*` parameters to create an export-only adapter stack.
+This is useful in customer accounts with an established landing zone or no
+remaining VPC quota. The subnets must belong to that VPC, have internet routes,
+and be in different availability zones.
 
 Outputs (all exported): `VpcId`, `PublicSubnet1`, `PublicSubnet2`,
 `SubnetIds` (comma-joined).
@@ -127,28 +137,38 @@ Outputs (all exported): `VpcId`, `PublicSubnet1`, `PublicSubnet2`,
 | `NetworkingStackName`      | String  | `codex-test-networking`    | Imports `<name>-VpcId` and `<name>-SubnetIds`. |
 | `OtelStackName`            | String  | `codex-test-otel-collector`| Imports `<name>-endpoint` only when `EnableOtel=true`. |
 | `EnableOtel`               | String  | `false`                    | Set to `true` only after deploying an OTel collector. |
-| `LiteLLMMasterKey`         | String  | —                          | `NoEcho`. Stored in Secrets Manager. |
-| `DBUsername`               | String  | —                          | `NoEcho`. RDS PostgreSQL username. |
-| `DBPassword`               | String  | —                          | `NoEcho`. RDS PostgreSQL password. |
-| `AwsRegion`                | String  | `us-east-2`                | Bedrock region for upstream calls. Use `us-east-2` for the default GPT-5.4 / GPT-5.5 Mantle setup. |
-| `LiteLLMImage`             | String  | —                          | Required. Fully-qualified ECR URI. |
+| `LiteLLMMasterKey`         | String  | `''`                       | Optional `NoEcho` override; blank generates the key in Secrets Manager. |
+| `DBUsername`               | String  | `litellm`                  | RDS username. RDS generates the password in Secrets Manager. |
+| `DBMultiAz`                | String  | `true`                     | Keep `true` for production; `false` is suitable for a disposable walkthrough. |
+| `AwsRegion`                | String  | `us-east-1`                | Bedrock region for upstream calls. |
+| `MantleProjectId`          | String  | `default`                  | Mantle project allowed by the task role. |
+| `LiteLLMImage`             | String  | —                          | Required immutable ECR digest. |
 | `AllowedCidr`              | String  | `10.0.0.0/8`               | ALB ingress CIDR. **Never** `0.0.0.0/0`. |
-| `AlbCertificateArn`        | String  | —                          | Required ACM certificate ARN for HTTPS listener. |
-| `AlbDomainName`            | String  | `''`                       | Optional DNS name matching `AlbCertificateArn`; used in endpoint output. |
+| `EnableTls`                | String  | `true`                     | Keep `true` outside a short-lived, CIDR-restricted walkthrough. |
+| `AlbCertificateArn`        | String  | `''`                       | Optional existing ACM certificate ARN. |
+| `AlbDomainName`            | String  | `''`                       | DNS name matching the managed or existing certificate. |
+| `Route53HostedZoneId`      | String  | `''`                       | Public zone used to create a managed certificate and ALB alias. |
 | `EnableJwtMiddleware`      | String  | `false`                    | `true` swaps API-key auth for OIDC JWT validation. |
 | `JwtMiddlewareImage`       | String  | `''`                       | Required when `EnableJwtMiddleware=true`. |
 | `JwksUrl`                  | String  | `''`                       | IdP JWKS endpoint. |
-| `JwtAudience`              | String  | `''`                       | Optional `aud` check. |
-| `JwtIssuer`                | String  | `''`                       | Optional `iss` check. |
+| `JwtAudience`              | String  | `''`                       | Required `aud` check when JWT middleware is enabled. |
+| `JwtIssuer`                | String  | `''`                       | Required `iss` check when JWT middleware is enabled. |
 | `UserKeyMappingStackName`  | String  | `''`                       | Required when `EnableJwtMiddleware=true`; must export `<name>-TableName`. |
 
-Outputs: `GatewayEndpoint` (exported as `${StackName}-GatewayEndpoint`),
-`OtelEndpoint` (only when `EnableOtel=true`).
+The template also exposes private subnet, task autoscaling, database sizing,
+WAF, alarm, and deletion-protection parameters. See
+[`docs/PRODUCTION_DEPLOYMENT.md`](../../docs/PRODUCTION_DEPLOYMENT.md) for the
+production profile.
+
+Outputs include `GatewayEndpoint` (exported as
+`${StackName}-GatewayEndpoint`), `GatewayAdminEndpoint`,
+`GatewayCertificateArn`, `LiteLLMSecretArn`, `DatabaseSecretArn`, and
+`WebAclArn` (only when `EnableWaf=true`).
 
 ## Quick Start: Native AWS Access (IAM Identity Center)
 
-Single-stack deployment. The Codex CLI uses the chained IAM role directly via
-the AWS SDK.
+Single-stack deployment. The Codex CLI uses the Identity Center permission-set
+credentials directly through the AWS SDK.
 
 ```bash
 aws cloudformation deploy \
@@ -157,17 +177,17 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
       RoleName=CodexBedrockIdCRole \
-      PermissionSetNamePattern='CodexBedrockUser_*' \
+      CreateChainedRole=false \
       AllowedBedrockRegions=us-east-1,us-west-2 \
-      AllowedModelIdPattern='openai.gpt-5-*'
+      AllowedModelIdPattern='openai.gpt-5.*'
 
 aws cloudformation describe-stacks \
   --stack-name codex-bedrock-idc \
   --query 'Stacks[0].Outputs'
 ```
 
-Then attach the resulting `PolicyArn` (or grant `sts:AssumeRole` on
-`RoleArn`) to the IdC Permission Set used by your Codex users. See
+Then attach the resulting `PolicyName` to the Identity Center permission set
+used by your Codex users. See
 `docs/QUICKSTART_NATIVE_AWS_ACCESS.md` for the matching client-side config.
 
 ## Quick Start: LLM Gateway
@@ -194,17 +214,11 @@ aws cloudformation deploy \
       NetworkingStackName=codex-networking \
       OtelStackName=codex-otel-collector \
       EnableOtel=false \
-      LiteLLMMasterKey=$(aws secretsmanager get-random-password \
-                            --exclude-punctuation --password-length 40 \
-                            --query RandomPassword --output text) \
       DBUsername=litellm \
-      DBPassword=$(aws secretsmanager get-random-password \
-                      --exclude-punctuation --password-length 32 \
-                      --query RandomPassword --output text) \
       AwsRegion=us-east-1 \
-      LiteLLMImage=<account>.dkr.ecr.<region>.amazonaws.com/codex-litellm:latest \
-      AlbCertificateArn=arn:aws:acm:<region>:<account>:certificate/<id> \
+      LiteLLMImage=<account>.dkr.ecr.<region>.amazonaws.com/codex-litellm@sha256:<digest> \
       AlbDomainName=litellm.example.com \
+      Route53HostedZoneId=Z0123456789EXAMPLE \
       AllowedCidr=10.0.0.0/8
 
 # 4) (Optional) Gateway dashboard
@@ -219,8 +233,9 @@ aws cloudformation describe-stacks \
   --output text
 ```
 
-The `GatewayEndpoint` output is what Codex points at via `OPENAI_BASE_URL` in
-its config. See `docs/QUICKSTART_LLM_GATEWAY.md` for the full flow.
+The `GatewayEndpoint` output is the custom provider `base_url` in the
+user-level Codex config. See `docs/QUICKSTART_LLM_GATEWAY_LITELLM.md` for the
+full flow.
 
 ## Validation
 

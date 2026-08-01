@@ -1,7 +1,13 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Codex with Bedrock - IAM Identity Center (IdC) Authentication Stack. Produces a Bedrock customer-managed policy and an IAM role trusted by sso.amazonaws.com with an AWSReservedSSO_* role-chaining condition, for use as the permission-boundary / role-chain target from an IdC Permission Set.'
+Description: 'Codex with Bedrock - IAM Identity Center authentication baseline. Produces a least-privilege customer-managed policy for direct attachment to an Identity Center permission set, with an optional chained IAM role.'
 
 Parameters:
+  CreateChainedRole:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Create an optional second IAM role for customers that require role chaining. The recommended direct permission-set path leaves this false.
+
   RoleName:
     Type: String
     Default: CodexBedrockIdCRole
@@ -29,7 +35,13 @@ Parameters:
   AllowedModelIdPattern:
     Type: String
     Default: '*'
-    Description: Bedrock model ID glob (e.g. "openai.gpt-5-4*"). Default * allows all approved-access models.
+    Description: Bedrock model ID glob (e.g. "openai.gpt-5.*"). Default * allows all approved-access models.
+
+  MantleProjectId:
+    Type: String
+    Default: default
+    AllowedPattern: '^[A-Za-z0-9._-]+$'
+    Description: Bedrock Mantle project that the role may use for Responses inference.
 
   MaxSessionDurationSeconds:
     Type: Number
@@ -46,6 +58,7 @@ Parameters:
 
 Conditions:
   MonitoringEnabled: !Equals [!Ref EnableMonitoring, 'true']
+  ChainedRoleEnabled: !Equals [!Ref CreateChainedRole, 'true']
 
 Resources:
   CodexBedrockInvokePolicy:
@@ -61,8 +74,6 @@ Resources:
             Action:
               - bedrock:InvokeModel
               - bedrock:InvokeModelWithResponseStream
-              - bedrock:Converse
-              - bedrock:ConverseStream
             Resource:
               - !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/${AllowedModelIdPattern}'
               - !Sub 'arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*'
@@ -78,12 +89,18 @@ Resources:
               # auth action and the inference action, verified against the live
               # API: CallWithBearerToken authenticates the request, then
               # CreateInference runs it against project/default.
-              - bedrock-mantle:CallWithBearerToken
               - bedrock-mantle:CreateInference
               - bedrock-mantle:GetInference
+              - bedrock-mantle:CancelInference
             # NOTE: these calls do not populate aws:RequestedRegion, so a region
             # condition here causes an implicit deny. Region is instead bounded
             # by the regional Mantle endpoint the bearer token targets.
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:bedrock-mantle:*:${AWS::AccountId}:project/${MantleProjectId}'
+          - Sid: MantleBearerToken
+            Effect: Allow
+            Action:
+              - bedrock-mantle:CallWithBearerToken
             Resource: '*'
           - Sid: ListBedrockResources
             Effect: Allow
@@ -115,6 +132,7 @@ Resources:
 
   CodexBedrockIdCRole:
     Type: AWS::IAM::Role
+    Condition: ChainedRoleEnabled
     Properties:
       RoleName: !Ref RoleName
       Description: Chained role assumed from an IdC AWSReservedSSO_* session for Codex-on-Bedrock usage.
@@ -143,12 +161,17 @@ Resources:
 Outputs:
   RoleArn:
     Description: ARN of the chained Bedrock role. Reference from Codex config or as a role-chain target.
+    Condition: ChainedRoleEnabled
     Value: !GetAtt CodexBedrockIdCRole.Arn
     Export:
       Name: !Sub '${AWS::StackName}-RoleArn'
   RoleName:
     Description: Name of the chained Bedrock role.
+    Condition: ChainedRoleEnabled
     Value: !Ref CodexBedrockIdCRole
+  PolicyName:
+    Description: Name of the customer-managed policy to attach directly to the Identity Center permission set.
+    Value: !Ref PolicyName
   PolicyArn:
     Description: ARN of the Bedrock customer-managed policy. Attach directly to the IdC Permission Set if you prefer no role chaining.
     Value: !Ref CodexBedrockInvokePolicy

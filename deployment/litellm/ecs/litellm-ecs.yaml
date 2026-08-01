@@ -24,20 +24,16 @@ Parameters:
 
   LiteLLMMasterKey:
     Type: String
+    Default: ""
     NoEcho: true
-    Description: LiteLLM master key - stored in Secrets Manager
-
-  DBPassword:
-    Type: String
-    NoEcho: true
-    Description: Password for the RDS PostgreSQL instance
+    Description: Optional LiteLLM master key override. Leave blank to generate it in Secrets Manager.
 
   DBUsername:
     Type: String
-    NoEcho: true
+    Default: litellm
     AllowedPattern: "[a-zA-Z][a-zA-Z0-9_]*"
     ConstraintDescription: Must begin with a letter and contain only letters, numbers, and underscores.
-    Description: Username for the RDS PostgreSQL instance
+    Description: Username for RDS. The password is generated and managed by RDS in Secrets Manager.
 
   DBEngineVersion:
     Type: String
@@ -51,24 +47,148 @@ Parameters:
     AllowedValues: [1, 5, 10, 15, 30, 60]
     Description: Enhanced monitoring interval in seconds for the RDS instance.
 
+  DBInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+    AllowedPattern: "db\\.[a-z0-9]+\\.[a-z0-9]+"
+    Description: RDS instance class. Use a non-burstable class after load testing production traffic.
+
+  DBAllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 65536
+    Description: Initial PostgreSQL storage in GiB.
+
+  DBMaxAllocatedStorage:
+    Type: Number
+    Default: 100
+    MinValue: 20
+    MaxValue: 65536
+    Description: Maximum PostgreSQL autoscaled storage in GiB.
+
+  DBBackupRetentionDays:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    MaxValue: 35
+    Description: Automated backup retention period.
+
+  DBDeletionProtection:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Enable for staging and production after the first successful deployment.
+
+  DBMultiAz:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Keep true for production. Set false for a disposable walkthrough to reduce cost and deployment time.
+
   AwsRegion:
     Type: String
     Default: us-east-1
     Description: Amazon Bedrock region for upstream model calls. The tested walkthrough uses us-east-1.
 
+  MantleProjectId:
+    Type: String
+    Default: default
+    AllowedPattern: "[A-Za-z0-9._-]+"
+    Description: Bedrock Mantle project ID that the task role can invoke.
+
   LiteLLMImage:
     Type: String
-    AllowedPattern: ".+/.+:.+"
+    AllowedPattern: ".+@sha256:[a-f0-9]{64}"
     ConstraintDescription: >
-      Must be a fully-qualified image reference such as
-      <account>.dkr.ecr.<region>.amazonaws.com/codex-litellm:<tag>.
+      Must be an immutable, fully-qualified image digest such as
+      <account>.dkr.ecr.<region>.amazonaws.com/codex-litellm@sha256:<digest>.
     Description: >
       Required. Fully-qualified container image reference for the LiteLLM
       gateway. Build a custom image using deployment/litellm/Dockerfile
-      (FROM ghcr.io/berriai/litellm:main-latest plus the repo's config and
-      Mantle token-refresh entrypoint), push it to ECR, and pass the image URI
-      here. The upstream ghcr.io/berriai/litellm image lacks the sample config
-      and startup wrapper and will crash-loop on startup.
+      with a reviewed LiteLLM version plus the repo's config and token-refresh
+      entrypoint, push it to ECR, and pass the image digest here.
+
+  DesiredCount:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    MaxValue: 100
+    Description: Initial ECS task count.
+
+  MinTaskCount:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    MaxValue: 100
+    Description: Minimum ECS task count for target-tracking autoscaling.
+
+  MaxTaskCount:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 100
+    Description: Maximum ECS task count for target-tracking autoscaling.
+
+  TargetCpuUtilization:
+    Type: Number
+    Default: 60
+    MinValue: 20
+    MaxValue: 90
+    Description: ECS CPU target percentage for autoscaling.
+
+  TaskSubnetIds:
+    Type: String
+    Default: ""
+    Description: Optional private subnet IDs for ECS tasks. Falls back to the networking stack SubnetIds export.
+
+  DatabaseSubnetIds:
+    Type: String
+    Default: ""
+    Description: Optional private subnet IDs for RDS. Falls back to TaskSubnetIds, then the networking stack export.
+
+  AlbSubnetIds:
+    Type: String
+    Default: ""
+    Description: Optional public subnet IDs for the ALB. Falls back to the networking stack SubnetIds export.
+
+  AssignPublicIp:
+    Type: String
+    Default: ENABLED
+    AllowedValues: [ENABLED, DISABLED]
+    Description: Use DISABLED when TaskSubnetIds are private subnets with NAT or required VPC endpoints.
+
+  EnableWaf:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Attach a regional WAF web ACL with managed protections and rate limiting.
+
+  EnableTls:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Keep true for every staging or production deployment. Set false only for
+      a short-lived, CIDR-restricted walkthrough that uses the raw ALB HTTP endpoint.
+
+  WafRateLimit:
+    Type: Number
+    Default: 2000
+    MinValue: 100
+    MaxValue: 2000000000
+    Description: Maximum requests per five-minute period from one source IP.
+
+  AlarmTopicArn:
+    Type: String
+    Default: ""
+    Description: Optional SNS topic ARN for operational alarm notifications.
+
+  EnableAlbDeletionProtection:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Enable for long-lived staging and production environments.
 
   AllowedCidr:
     Type: String
@@ -79,16 +199,34 @@ Parameters:
       Do NOT use 0.0.0.0/0 - AWS security scans will auto-delete the listener.
       For public access, deploy AWS WAF with rate limiting and IP reputation filtering.
 
+  AdditionalAllowedCidr1:
+    Type: String
+    Default: ""
+    Description: Optional second restricted IPv4 CIDR allowed to reach the ALB.
+
+  AdditionalAllowedCidr2:
+    Type: String
+    Default: ""
+    Description: Optional third restricted IPv4 CIDR allowed to reach the ALB.
+
   AlbCertificateArn:
     Type: String
-    AllowedPattern: ".+"
-    ConstraintDescription: ACM certificate ARN is required for HTTPS.
-    Description: ACM certificate ARN. The ALB listener uses HTTPS on port 443.
+    Default: ""
+    AllowedPattern: "^$|arn:[^:]+:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+"
+    ConstraintDescription: Must be blank or a valid ACM certificate ARN.
+    Description: Optional existing ACM certificate ARN. Leave blank to create one using Route53HostedZoneId.
 
   AlbDomainName:
     Type: String
     Default: ""
-    Description: Optional DNS name that resolves to the ALB and matches AlbCertificateArn. Recommended for trusted HTTPS; if omitted, GatewayEndpoint falls back to the raw ALB DNS name for low-level smoke testing only.
+    Description: DNS name that resolves to the ALB and matches the certificate.
+
+  Route53HostedZoneId:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|(?:/hostedzone/)?Z[A-Z0-9]+$"
+    ConstraintDescription: Must be blank or a Route 53 public hosted zone ID.
+    Description: Optional public hosted zone ID used to create the certificate and alias record.
 
   # JWT Middleware Parameters (optional - for OIDC authentication)
   EnableJwtMiddleware:
@@ -102,9 +240,10 @@ Parameters:
   JwtMiddlewareImage:
     Type: String
     Default: ""
+    AllowedPattern: "^$|.+@sha256:[a-f0-9]{64}"
     Description: >
       JWT middleware container image URI (required if EnableJwtMiddleware=true).
-      Format: <account>.dkr.ecr.<region>.amazonaws.com/codex-jwt-middleware:latest
+      Format: <account>.dkr.ecr.<region>.amazonaws.com/codex-jwt-middleware@sha256:<digest>
 
   JwksUrl:
     Type: String
@@ -117,18 +256,13 @@ Parameters:
     Type: String
     Default: ""
     Description: >
-      Expected JWT audience claim (optional, strongly recommended).
-      Leave empty to skip audience validation. The middleware verifies the
-      audience only when this is set.
+      Expected JWT audience claim. Required if EnableJwtMiddleware=true.
 
   JwtIssuer:
     Type: String
     Default: ""
     Description: >
-      Expected JWT issuer claim (optional, strongly recommended).
-      Leave empty to skip issuer validation. When unset, any token signed by a
-      key in the JWKS is accepted - set this to your IdP issuer URL on a shared
-      or multi-tenant JWKS.
+      Expected JWT issuer claim. Required if EnableJwtMiddleware=true.
 
   UserKeyMappingStackName:
     Type: String
@@ -137,15 +271,81 @@ Parameters:
       CloudFormation stack name for user-key-mapping DynamoDB table (required if EnableJwtMiddleware=true).
       Example: codex-user-key-mapping
 
+Rules:
+  AllowedCidrRestricted:
+    Assertions:
+      - Assert: !Not [!Equals [!Ref AllowedCidr, "0.0.0.0/0"]]
+        AssertDescription: AllowedCidr must not expose the gateway to the entire internet.
+      - Assert: !Not [!Equals [!Ref AdditionalAllowedCidr1, "0.0.0.0/0"]]
+        AssertDescription: AdditionalAllowedCidr1 must not expose the gateway to the entire internet.
+      - Assert: !Not [!Equals [!Ref AdditionalAllowedCidr2, "0.0.0.0/0"]]
+        AssertDescription: AdditionalAllowedCidr2 must not expose the gateway to the entire internet.
+  TlsConfigurationComplete:
+    RuleCondition: !Equals [!Ref EnableTls, "true"]
+    Assertions:
+      - Assert: !Or
+          - !Not [!Equals [!Ref AlbCertificateArn, ""]]
+          - !And
+            - !Not [!Equals [!Ref AlbDomainName, ""]]
+            - !Not [!Equals [!Ref Route53HostedZoneId, ""]]
+        AssertDescription: Provide AlbCertificateArn, or provide both AlbDomainName and Route53HostedZoneId.
+      - Assert: !Or
+          - !Equals [!Ref Route53HostedZoneId, ""]
+          - !Not [!Equals [!Ref AlbDomainName, ""]]
+        AssertDescription: AlbDomainName is required when Route53HostedZoneId is provided.
+  PlainHttpDemoConfiguration:
+    RuleCondition: !Equals [!Ref EnableTls, "false"]
+    Assertions:
+      - Assert: !Equals [!Ref AlbCertificateArn, ""]
+        AssertDescription: AlbCertificateArn must be blank when EnableTls=false.
+      - Assert: !Equals [!Ref AlbDomainName, ""]
+        AssertDescription: AlbDomainName must be blank when EnableTls=false.
+      - Assert: !Equals [!Ref Route53HostedZoneId, ""]
+        AssertDescription: Route53HostedZoneId must be blank when EnableTls=false.
+  JwtConfigurationComplete:
+    RuleCondition: !Equals [!Ref EnableJwtMiddleware, "true"]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref JwtMiddlewareImage, ""]]
+        AssertDescription: JwtMiddlewareImage is required when JWT middleware is enabled.
+      - Assert: !Not [!Equals [!Ref JwksUrl, ""]]
+        AssertDescription: JwksUrl is required when JWT middleware is enabled.
+      - Assert: !Not [!Equals [!Ref JwtAudience, ""]]
+        AssertDescription: JwtAudience is required when JWT middleware is enabled.
+      - Assert: !Not [!Equals [!Ref JwtIssuer, ""]]
+        AssertDescription: JwtIssuer is required when JWT middleware is enabled.
+      - Assert: !Not [!Equals [!Ref UserKeyMappingStackName, ""]]
+        AssertDescription: UserKeyMappingStackName is required when JWT middleware is enabled.
+
 Conditions:
+  TlsEnabled: !Equals [!Ref EnableTls, "true"]
+  DBMultiAzEnabled: !Equals [!Ref DBMultiAz, "true"]
+  HasProvidedLiteLLMMasterKey: !Not [!Equals [!Ref LiteLLMMasterKey, ""]]
+  HasAlbCertificateArn: !Not [!Equals [!Ref AlbCertificateArn, ""]]
+  CreateManagedCertificate: !And
+    - !Equals [!Ref EnableTls, "true"]
+    - !Equals [!Ref AlbCertificateArn, ""]
+    - !Not [!Equals [!Ref AlbDomainName, ""]]
+    - !Not [!Equals [!Ref Route53HostedZoneId, ""]]
   UseJwtMiddleware: !Equals [!Ref EnableJwtMiddleware, "true"]
   OtelEnabled: !Equals [!Ref EnableOtel, "true"]
   HasAlbDomainName: !Not [!Equals [!Ref AlbDomainName, ""]]
+  CreateDnsAlias: !And
+    - !Equals [!Ref EnableTls, "true"]
+    - !Not [!Equals [!Ref Route53HostedZoneId, ""]]
+  HasTaskSubnetIds: !Not [!Equals [!Ref TaskSubnetIds, ""]]
+  HasDatabaseSubnetIds: !Not [!Equals [!Ref DatabaseSubnetIds, ""]]
+  HasAlbSubnetIds: !Not [!Equals [!Ref AlbSubnetIds, ""]]
+  HasAdditionalAllowedCidr1: !Not [!Equals [!Ref AdditionalAllowedCidr1, ""]]
+  HasAdditionalAllowedCidr2: !Not [!Equals [!Ref AdditionalAllowedCidr2, ""]]
+  WafEnabled: !Equals [!Ref EnableWaf, "true"]
+  HasAlarmTopic: !Not [!Equals [!Ref AlarmTopicArn, ""]]
 
 Resources:
 
   LiteLLMKmsKey:
     Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Description: !Sub "${AWS::StackName} LiteLLM logs and secrets key"
       EnableKeyRotation: true
@@ -183,6 +383,8 @@ Resources:
 
   LiteLLMSecret:
     Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Metadata:
       checkov:
         skip:
@@ -198,7 +400,17 @@ Resources:
     Properties:
       Name: !Sub "${AWS::StackName}/litellm-secrets"
       KmsKeyId: !Ref LiteLLMKmsKey
-      SecretString: !Sub '{"LITELLM_MASTER_KEY":"${LiteLLMMasterKey}"}'
+      SecretString: !If
+        - HasProvidedLiteLLMMasterKey
+        - !Sub '{"LITELLM_MASTER_KEY":"${LiteLLMMasterKey}"}'
+        - !Ref AWS::NoValue
+      GenerateSecretString: !If
+        - HasProvidedLiteLLMMasterKey
+        - !Ref AWS::NoValue
+        - SecretStringTemplate: "{}"
+          GenerateStringKey: LITELLM_MASTER_KEY
+          PasswordLength: 48
+          ExcludePunctuation: true
 
   # --- IAM ---
 
@@ -213,7 +425,9 @@ Resources:
             Action:
               - secretsmanager:GetSecretValue
               - secretsmanager:DescribeSecret
-            Resource: !Ref LiteLLMSecret
+            Resource:
+              - !Ref LiteLLMSecret
+              - !GetAtt RDSInstance.MasterUserSecret.SecretArn
           - Effect: Allow
             Action:
               - kms:Decrypt
@@ -231,11 +445,6 @@ Resources:
         Statement:
           - Effect: Allow
             Action:
-              - bedrock:InvokeModel
-              - bedrock:InvokeModelWithResponseStream
-            Resource: !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
-          - Effect: Allow
-            Action:
               - bedrock:CallWithBearerToken
             Resource: "*"
             Condition:
@@ -249,10 +458,7 @@ Resources:
               - bedrock-mantle:CreateInference
               - bedrock-mantle:GetInference
               - bedrock-mantle:CancelInference
-            Resource: !Sub "arn:${AWS::Partition}:bedrock-mantle:*:${AWS::AccountId}:project/*"
-            Condition:
-              StringEquals:
-                aws:RequestedRegion: !Ref AwsRegion
+            Resource: !Sub "arn:${AWS::Partition}:bedrock-mantle:${AwsRegion}:${AWS::AccountId}:project/${MantleProjectId}"
           - Effect: Allow
             Action:
               - bedrock-mantle:CallWithBearerToken
@@ -318,14 +524,32 @@ Resources:
         Fn::Sub: "${NetworkingStackName}-VpcId"
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
+          FromPort: !If [TlsEnabled, 443, 80]
+          ToPort: !If [TlsEnabled, 443, 80]
           CidrIp: !Ref AllowedCidr
-          Description: Allow ALB traffic from the configured CIDR
+          Description: Allow the configured gateway listener from the configured CIDR
+        - !If
+          - HasAdditionalAllowedCidr1
+          - IpProtocol: tcp
+            FromPort: !If [TlsEnabled, 443, 80]
+            ToPort: !If [TlsEnabled, 443, 80]
+            CidrIp: !Ref AdditionalAllowedCidr1
+            Description: Allow the configured gateway listener from additional CIDR 1
+          - !Ref AWS::NoValue
+        - !If
+          - HasAdditionalAllowedCidr2
+          - IpProtocol: tcp
+            FromPort: !If [TlsEnabled, 443, 80]
+            ToPort: !If [TlsEnabled, 443, 80]
+            CidrIp: !Ref AdditionalAllowedCidr2
+            Description: Allow the configured gateway listener from additional CIDR 2
+          - !Ref AWS::NoValue
       SecurityGroupEgress: []
 
   ALBLogsBucket:
     Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Metadata:
       checkov:
         skip:
@@ -337,9 +561,8 @@ Resources:
             reason: This bucket is the ALB access-log destination; recursive server access logging is intentionally not enabled.
       guard:
         SuppressedRules:
-          - S3_BUCKET_NO_PUBLIC_RW_ACL: "AccessControl is explicitly set to Private; cfn-guard false positive triggered by missing property check."
+          - S3_BUCKET_NO_PUBLIC_RW_ACL: "Bucket ownership and public access controls prevent public ACL use; cfn-guard flags the omitted legacy AccessControl property."
     Properties:
-      AccessControl: Private
       OwnershipControls:
         Rules:
           - ObjectOwnership: BucketOwnerPreferred
@@ -474,10 +697,16 @@ Resources:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
       DBSubnetGroupDescription: LiteLLM RDS subnets
-      SubnetIds: !Split
-        - ","
-        - !ImportValue
-          Fn::Sub: "${NetworkingStackName}-SubnetIds"
+      SubnetIds: !If
+        - HasDatabaseSubnetIds
+        - !Split [",", !Ref DatabaseSubnetIds]
+        - !If
+          - HasTaskSubnetIds
+          - !Split [",", !Ref TaskSubnetIds]
+          - !Split
+            - ","
+            - !ImportValue
+              Fn::Sub: "${NetworkingStackName}-SubnetIds"
 
   RDSMonitoringRole:
     Type: AWS::IAM::Role
@@ -494,29 +723,32 @@ Resources:
 
   RDSInstance:
     Type: AWS::RDS::DBInstance
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
     Properties:
       DBName: litellm
-      DBInstanceClass: db.t4g.micro
+      DBInstanceClass: !Ref DBInstanceClass
       Engine: postgres
       EngineVersion: !Ref DBEngineVersion
       MasterUsername: !Ref DBUsername
-      MasterUserPassword: !Ref DBPassword
-      AllocatedStorage: "20"
+      ManageMasterUserPassword: true
+      MasterUserSecret:
+        KmsKeyId: !GetAtt LiteLLMKmsKey.Arn
+      AllocatedStorage: !Ref DBAllocatedStorage
+      MaxAllocatedStorage: !Ref DBMaxAllocatedStorage
       StorageEncrypted: true
+      KmsKeyId: !GetAtt LiteLLMKmsKey.Arn
       EnableIAMDatabaseAuthentication: true
-      MultiAZ: true
+      MultiAZ: !If [DBMultiAzEnabled, true, false]
       MonitoringInterval: !Ref RDSMonitoringInterval
       MonitoringRoleArn: !GetAtt RDSMonitoringRole.Arn
       DBSubnetGroupName: !Ref DBSubnetGroup
       PubliclyAccessible: false
       VPCSecurityGroups:
         - !Ref DBSecurityGroup
-      # Keep the reference stack deletable for end-to-end testing; enable
-      # deletion protection separately for long-lived production environments.
-      DeletionProtection: false
-      BackupRetentionPeriod: 7
+      DeletionProtection: !Ref DBDeletionProtection
+      BackupRetentionPeriod: !Ref DBBackupRetentionDays
+      CopyTagsToSnapshot: true
       AutoMinorVersionUpgrade: true
 
   # --- ECS ---
@@ -532,6 +764,8 @@ Resources:
 
   LogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub "/ecs/${AWS::StackName}"
       KmsKeyId: !GetAtt LiteLLMKmsKey.Arn
@@ -545,6 +779,9 @@ Resources:
       RequiresCompatibilities: [FARGATE]
       Cpu: "1024"
       Memory: "2048"
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
       ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
       TaskRoleArn: !GetAtt TaskRole.Arn
       ContainerDefinitions:
@@ -553,6 +790,7 @@ Resources:
           Image: !Ref LiteLLMImage
           PortMappings:
             - ContainerPort: 4000
+          StopTimeout: 60
           Command: ["--config", "/app/config.yaml", "--port", "4000"]
           Environment:
             - Name: AWS_REGION
@@ -561,8 +799,12 @@ Resources:
               Value: !Ref AwsRegion
             - Name: BEDROCK_MANTLE_REGION
               Value: !Ref AwsRegion
-            - Name: DATABASE_URL
-              Value: !Sub "postgresql://${DBUsername}:${DBPassword}@${RDSInstance.Endpoint.Address}:5432/litellm"
+            - Name: DB_HOST
+              Value: !GetAtt RDSInstance.Endpoint.Address
+            - Name: DB_PORT
+              Value: !GetAtt RDSInstance.Endpoint.Port
+            - Name: DB_NAME
+              Value: litellm
             # LiteLLM OTEL configuration — only injected when OTel is enabled
             - !If
               - OtelEnabled
@@ -588,12 +830,17 @@ Resources:
           Secrets:
             - Name: LITELLM_MASTER_KEY
               ValueFrom: !Sub "${LiteLLMSecret}:LITELLM_MASTER_KEY::"
+            - Name: DB_USERNAME
+              ValueFrom: !Sub "${RDSInstance.MasterUserSecret.SecretArn}:username::"
+            - Name: DB_PASSWORD
+              ValueFrom: !Sub "${RDSInstance.MasterUserSecret.SecretArn}:password::"
           LogConfiguration:
             LogDriver: awslogs
             Options:
               awslogs-group: !Ref LogGroup
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: litellm
+              mode: blocking
 
         # JWT Middleware Container (conditional - only if EnableJwtMiddleware=true)
         - !If
@@ -628,6 +875,7 @@ Resources:
                 awslogs-group: !Ref LogGroup
                 awslogs-region: !Ref AWS::Region
                 awslogs-stream-prefix: jwt-middleware
+                mode: blocking
           - !Ref AWS::NoValue
 
   # --- ALB ---
@@ -637,15 +885,22 @@ Resources:
     DependsOn: ALBLogsBucketPolicy
     Properties:
       Type: application
-      Subnets: !Split
-        - ","
-        - !ImportValue
-          Fn::Sub: "${NetworkingStackName}-SubnetIds"
+      Subnets: !If
+        - HasAlbSubnetIds
+        - !Split [",", !Ref AlbSubnetIds]
+        - !Split
+          - ","
+          - !ImportValue
+            Fn::Sub: "${NetworkingStackName}-SubnetIds"
       SecurityGroups:
         - !Ref ALBSecurityGroup
       LoadBalancerAttributes:
         - Key: routing.http.drop_invalid_header_fields.enabled
           Value: "true"
+        - Key: deletion_protection.enabled
+          Value: !Ref EnableAlbDeletionProtection
+        - Key: idle_timeout.timeout_seconds
+          Value: "300"
         - Key: access_logs.s3.enabled
           Value: "true"
         - Key: access_logs.s3.bucket
@@ -664,16 +919,37 @@ Resources:
       TargetType: ip
       # If JWT middleware enabled, use /health, otherwise use LiteLLM's /health/liveliness
       HealthCheckPath: !If [UseJwtMiddleware, /health, /health/liveliness]
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+
+  ManagedCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Condition: CreateManagedCertificate
+    Properties:
+      DomainName: !Ref AlbDomainName
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref AlbDomainName
+          HostedZoneId: !Ref Route53HostedZoneId
 
   ALBListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
       LoadBalancerArn: !Ref ALB
-      Port: 443
-      Protocol: HTTPS
-      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
-      Certificates:
-        - CertificateArn: !Ref AlbCertificateArn
+      Port: !If [TlsEnabled, 443, 80]
+      Protocol: !If [TlsEnabled, HTTPS, HTTP]
+      SslPolicy: !If
+        - TlsEnabled
+        - ELBSecurityPolicy-TLS13-1-2-2021-06
+        - !Ref AWS::NoValue
+      Certificates: !If
+        - TlsEnabled
+        - - CertificateArn: !If
+              - HasAlbCertificateArn
+              - !Ref AlbCertificateArn
+              - !Ref ManagedCertificate
+        - !Ref AWS::NoValue
       DefaultActions:
         - Type: forward
           TargetGroupArn: !Ref ALBTargetGroup
@@ -687,16 +963,21 @@ Resources:
       Cluster: !Ref ECSCluster
       TaskDefinition: !Ref TaskDefinition
       LaunchType: FARGATE
-      DesiredCount: 2
+      PlatformVersion: LATEST
+      DesiredCount: !Ref DesiredCount
+      HealthCheckGracePeriodSeconds: 120
       NetworkConfiguration:
         AwsvpcConfiguration:
-          Subnets: !Split
-            - ","
-            - !ImportValue
-              Fn::Sub: "${NetworkingStackName}-SubnetIds"
+          Subnets: !If
+            - HasTaskSubnetIds
+            - !Split [",", !Ref TaskSubnetIds]
+            - !Split
+              - ","
+              - !ImportValue
+                Fn::Sub: "${NetworkingStackName}-SubnetIds"
           SecurityGroups:
             - !Ref TaskSecurityGroup
-          AssignPublicIp: ENABLED
+          AssignPublicIp: !Ref AssignPublicIp
       LoadBalancers:
         - ContainerName: !If [UseJwtMiddleware, jwt-middleware, litellm]
           ContainerPort: !If [UseJwtMiddleware, 8080, 4000]
@@ -704,14 +985,219 @@ Resources:
       DeploymentConfiguration:
         MinimumHealthyPercent: 100
         MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+
+  GatewayAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: CreateDnsAlias
+    Properties:
+      HostedZoneId: !Ref Route53HostedZoneId
+      Name: !Ref AlbDomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt ALB.DNSName
+        HostedZoneId: !GetAtt ALB.CanonicalHostedZoneID
+        EvaluateTargetHealth: true
+
+  ECSServiceScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MinCapacity: !Ref MinTaskCount
+      MaxCapacity: !Ref MaxTaskCount
+      ResourceId: !Join
+        - "/"
+        - - service
+          - !Ref ECSCluster
+          - !GetAtt ECSService.Name
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  ECSServiceCpuScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub "${AWS::StackName}-cpu-target"
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ECSServiceScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+        TargetValue: !Ref TargetCpuUtilization
+
+  GatewayWebAcl:
+    Type: AWS::WAFv2::WebACL
+    Condition: WafEnabled
+    Properties:
+      Name: !Sub "${AWS::StackName}-gateway"
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "${AWS::StackName}-gateway"
+        SampledRequestsEnabled: true
+      Rules:
+        # Codex Responses payloads include instructions and tool schemas and
+        # commonly exceed the 8 KB body inspection limit for ALB web ACLs.
+        # Preserve the managed size restriction everywhere except the exact
+        # Responses endpoint and method used by Codex.
+        - Name: BlockOversizeBodiesExceptResponses
+          Priority: 0
+          Action:
+            Block: {}
+          Statement:
+            AndStatement:
+              Statements:
+                - NotStatement:
+                    Statement:
+                      AndStatement:
+                        Statements:
+                          - ByteMatchStatement:
+                              FieldToMatch:
+                                UriPath: {}
+                              PositionalConstraint: EXACTLY
+                              SearchString: /v1/responses
+                              TextTransformations:
+                                - Priority: 0
+                                  Type: NONE
+                          - ByteMatchStatement:
+                              FieldToMatch:
+                                Method: {}
+                              PositionalConstraint: EXACTLY
+                              SearchString: POST
+                              TextTransformations:
+                                - Priority: 0
+                                  Type: NONE
+                - SizeConstraintStatement:
+                    ComparisonOperator: GT
+                    FieldToMatch:
+                      Body:
+                        OversizeHandling: MATCH
+                    Size: 8192
+                    TextTransformations:
+                      - Priority: 0
+                        Type: NONE
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: BlockOversizeBodiesExceptResponses
+            SampledRequestsEnabled: true
+        - Name: AWSManagedCommon
+          Priority: 1
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+              RuleActionOverrides:
+                - Name: SizeRestrictions_BODY
+                  ActionToUse:
+                    Count: {}
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: AWSManagedCommon
+            SampledRequestsEnabled: true
+        - Name: AWSManagedKnownBadInputs
+          Priority: 2
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: AWSManagedKnownBadInputs
+            SampledRequestsEnabled: true
+        - Name: PerIpRateLimit
+          Priority: 3
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              AggregateKeyType: IP
+              Limit: !Ref WafRateLimit
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: PerIpRateLimit
+            SampledRequestsEnabled: true
+
+  GatewayWebAclAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Condition: WafEnabled
+    Properties:
+      ResourceArn: !Ref ALB
+      WebACLArn: !GetAtt GatewayWebAcl.Arn
+
+  GatewayTarget5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Gateway targets returned elevated 5xx responses.
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_Target_5XX_Count
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !GetAtt ALB.LoadBalancerFullName
+        - Name: TargetGroup
+          Value: !GetAtt ALBTargetGroup.TargetGroupFullName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 3
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If
+        - HasAlarmTopic
+        - [!Ref AlarmTopicArn]
+        - !Ref AWS::NoValue
+
+  GatewayUnhealthyHostAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: One or more gateway targets are unhealthy.
+      Namespace: AWS/ApplicationELB
+      MetricName: UnHealthyHostCount
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !GetAtt ALB.LoadBalancerFullName
+        - Name: TargetGroup
+          Value: !GetAtt ALBTargetGroup.TargetGroupFullName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: breaching
+      AlarmActions: !If
+        - HasAlarmTopic
+        - [!Ref AlarmTopicArn]
+        - !Ref AWS::NoValue
 
 Outputs:
-  GatewayEndpoint:
-    Description: LiteLLM gateway URL. When AlbDomainName is blank, this falls back to the raw ALB DNS name and is suitable only for low-level smoke testing because the ACM certificate will not match that hostname.
+  GatewayAdminEndpoint:
+    Description: LiteLLM gateway root URL for administrative endpoints such as /key/generate.
     Value: !If
-      - HasAlbDomainName
-      - !Sub "https://${AlbDomainName}/v1"
-      - !Sub "https://${ALB.DNSName}/v1"
+      - TlsEnabled
+      - !If
+        - HasAlbDomainName
+        - !Sub "https://${AlbDomainName}"
+        - !Sub "https://${ALB.DNSName}"
+      - !Sub "http://${ALB.DNSName}"
+
+  GatewayEndpoint:
+    Description: LiteLLM /v1 URL. The HTTP form is only for a short-lived, CIDR-restricted walkthrough.
+    Value: !If
+      - TlsEnabled
+      - !If
+        - HasAlbDomainName
+        - !Sub "https://${AlbDomainName}/v1"
+        - !Sub "https://${ALB.DNSName}/v1"
+      - !Sub "http://${ALB.DNSName}/v1"
     Export:
       Name: !Sub "${AWS::StackName}-GatewayEndpoint"
 
@@ -720,3 +1206,28 @@ Outputs:
     Description: OTel collector endpoint used by this deployment
     Value: !ImportValue
       Fn::Sub: "${OtelStackName}-endpoint"
+
+  DatabaseSecretArn:
+    Description: RDS-managed Secrets Manager secret containing the database username and password.
+    Value: !GetAtt RDSInstance.MasterUserSecret.SecretArn
+
+  LiteLLMSecretArn:
+    Description: Secrets Manager secret containing the generated or supplied LiteLLM master key.
+    Value: !Ref LiteLLMSecret
+
+  LiteLLMKmsKeyArn:
+    Description: KMS key used for LiteLLM secrets and logs.
+    Value: !GetAtt LiteLLMKmsKey.Arn
+
+  GatewayCertificateArn:
+    Condition: TlsEnabled
+    Description: ACM certificate used by the HTTPS listener.
+    Value: !If
+      - HasAlbCertificateArn
+      - !Ref AlbCertificateArn
+      - !Ref ManagedCertificate
+
+  WebAclArn:
+    Condition: WafEnabled
+    Description: WAF web ACL attached to the gateway ALB.
+    Value: !GetAtt GatewayWebAcl.Arn

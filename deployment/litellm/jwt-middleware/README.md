@@ -1,15 +1,20 @@
 # JWT Middleware for LiteLLM Gateway
 
-Custom JWT validation middleware that enables OIDC/SSO self-service API key generation **without requiring LiteLLM Enterprise license**.
+Reference JWT validation middleware for OIDC/SSO self-service key mapping when
+the native LiteLLM JWT feature is not selected. Verify current LiteLLM license
+terms before choosing between this middleware and vendor-supported JWT.
 
 ## Overview
 
-This middleware sits between your ALB and LiteLLM gateway, providing:
-- ✅ JWT token validation from corporate IdP (Okta, Azure AD, Auth0, etc.)
-- ✅ Automatic API key generation/management per user
-- ✅ User-to-key mapping with DynamoDB caching
-- ✅ Self-service portal for developers
-- ✅ **No Enterprise license required**
+This middleware sits between the ALB and LiteLLM gateway and provides:
+
+- JWT validation for Okta, Entra ID, Auth0, Cognito, and other OIDC providers
+- automatic per-user LiteLLM key generation
+- DynamoDB-backed user-to-key mapping
+- a self-service developer portal
+
+The mapping table contains gateway credentials and must remain encrypted,
+private, access-logged, and limited to the middleware task role.
 
 ## Architecture
 
@@ -63,8 +68,8 @@ the JWT-middleware-specific steps below extract the OIDC path. Set
 | Value | Description |
 |-------|-------------|
 | JWKS URL | `https://your-tenant.okta.com/.well-known/jwks.json` |
-| JWT Audience | Client ID (optional — empty disables audience validation) |
-| JWT Issuer | Issuer URL (optional — empty disables issuer validation) |
+| JWT Audience | Client ID (required) |
+| JWT Issuer | Issuer URL (required) |
 
 These map directly to the `JwksUrl`, `JwtAudience`, and `JwtIssuer` parameters
 on `deployment/litellm/ecs/litellm-ecs.yaml`.
@@ -74,7 +79,7 @@ on `deployment/litellm/ecs/litellm-ecs.yaml`.
 ```bash
 export JWT_REPO=codex-jwt-middleware
 export JWT_IMAGE_TAG=v1
-export JWT_IMAGE="$ECR_REGISTRY/$JWT_REPO:$JWT_IMAGE_TAG"
+export JWT_IMAGE_TAGGED="$ECR_REGISTRY/$JWT_REPO:$JWT_IMAGE_TAG"
 
 aws ecr create-repository \
   --repository-name "$JWT_REPO" \
@@ -84,15 +89,23 @@ aws ecr create-repository \
 
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  --tag "$JWT_IMAGE" \
+  --tag "$JWT_IMAGE_TAGGED" \
   --file deployment/litellm/jwt-middleware/Dockerfile \
   --push \
   deployment/litellm/jwt-middleware
+
+export JWT_IMAGE_DIGEST=$(aws ecr describe-images \
+  --repository-name "$JWT_REPO" \
+  --image-ids imageTag="$JWT_IMAGE_TAG" \
+  --region "$AWS_REGION" \
+  --query 'imageDetails[0].imageDigest' \
+  --output text)
+export JWT_IMAGE="$ECR_REGISTRY/$JWT_REPO@$JWT_IMAGE_DIGEST"
 ```
 
 ### Step 3: Build and push the LiteLLM image
 
-Follow Step 2 of [`QUICKSTART_LLM_GATEWAY.md`](../../../docs/QUICKSTART_LLM_GATEWAY.md#step-2-build-and-push-the-litellm-image)
+Follow Step 2 of [`QUICKSTART_LLM_GATEWAY_LITELLM.md`](../../../docs/QUICKSTART_LLM_GATEWAY_LITELLM.md#step-2-build-and-push-litellm-image)
 to build and push `$LITELLM_IMAGE`.
 
 ### Step 4: Deploy the user-key-mapping DynamoDB stack
@@ -113,8 +126,6 @@ Deploy the networking stack first if not already in place
 
 ```bash
 export GATEWAY_STACK=codex-litellm-gateway
-export LITELLM_MASTER_KEY="sk-litellm-$(openssl rand -hex 24)"
-export DB_PASSWORD="$(openssl rand -base64 24 | tr -d '/+=')"
 
 aws cloudformation deploy \
   --stack-name "$GATEWAY_STACK" \
@@ -123,9 +134,7 @@ aws cloudformation deploy \
   --region "$AWS_REGION" \
   --parameter-overrides \
       NetworkingStackName=codex-networking \
-      LiteLLMMasterKey="$LITELLM_MASTER_KEY" \
       DBUsername=litellm \
-      DBPassword="$DB_PASSWORD" \
       AwsRegion="$BEDROCK_REGION" \
       LiteLLMImage="$LITELLM_IMAGE" \
       AlbCertificateArn="$ALB_CERTIFICATE_ARN" \
@@ -138,8 +147,9 @@ aws cloudformation deploy \
       UserKeyMappingStackName=codex-user-key-mapping
 ```
 
-Stack outputs include `GatewayEndpoint` (the gateway base URL); the
-self-service portal is served at `<GatewayEndpoint>/api/my-key`.
+Stack outputs include `GatewayEndpoint` (the Responses API base URL) and
+`GatewayAdminEndpoint`; the self-service portal is served at
+`<GatewayAdminEndpoint>/api/my-key`.
 
 ## Developer Experience
 
@@ -253,18 +263,19 @@ python3 -m unittest discover -s tests -v
   gateway lifting the namespaced LiteLLM metric keys). Needs `PyYAML` (in
   `tests/requirements.txt`).
 
-## Cost
+## Cost Inputs
 
 **Additional AWS costs compared to standard LiteLLM deployment:**
 
-| Service | Monthly Cost |
-|---------|-------------|
-| DynamoDB table | ~$1-5 (pay-per-request) |
-| ECS task (JWT middleware) | ~$5 (+0.25 vCPU, +512MB) |
-| ECR storage | ~$0.01 (+100MB) |
-| **Total** | **~$6-10/month** |
+| Service | Estimate using |
+|---------|----------------|
+| DynamoDB table | Request volume, item size, backups, and region |
+| ECS task (JWT middleware) | Requested CPU/memory, task count, and region |
+| ECR storage | Image size, retention, and data transfer |
 
-**vs. LiteLLM Enterprise:** ~$500-2000+/month
+Use the AWS Pricing Calculator for the selected customer topology. For
+licensed LiteLLM features, use current vendor pricing and contract terms; do
+not copy a point-in-time quote into the architecture decision.
 
 ## Monitoring
 
@@ -327,9 +338,9 @@ aws ecs describe-task-definition --task-definition <task-def-arn> \
 # Check LiteLLM is healthy
 curl http://localhost:4000/health/liveliness
 
-# Verify master key
-aws secretsmanager get-secret-value \
-  --secret-id codex-litellm-gateway/litellm-master-key \
+# Verify the secret exists without retrieving its value
+aws secretsmanager describe-secret \
+  --secret-id codex-litellm-gateway/litellm-secrets \
   --region us-west-2
 
 # Check container logs
@@ -360,18 +371,21 @@ aws iam list-attached-role-policies --role-name <task-role-name>
 5. **Key Rotation**: Keys have 90-day TTL, auto-cleanup via DynamoDB TTL
 6. **Audit Trail**: All key creation logged to CloudWatch
 
-## Comparison: Custom Middleware vs LiteLLM Enterprise
+## Comparison: Custom Middleware vs Licensed LiteLLM Features
 
-| Feature | Custom Middleware | LiteLLM Enterprise |
+Vendor packaging changes. Confirm every licensed capability and support term
+against the current LiteLLM documentation and customer contract.
+
+| Feature | Custom Middleware | Licensed offering to verify |
 |---------|-------------------|-------------------|
-| **Cost** | ~$6-10/month | ~$500-2000+/month |
-| **Setup Time** | ~1 day | ~1 day |
+| **Cost** | Customer AWS infrastructure and operations | Current vendor quote plus AWS costs |
+| **Implementation** | Customer-owned integration | Validate onboarding scope |
 | **Maintenance** | Self-managed | Vendor-supported |
-| **OIDC/SSO** | ✅ Basic | ✅ Advanced (roles, RBAC) |
-| **Key Management** | ✅ Auto-generation | ✅ Advanced policies |
-| **Audit Logging** | ✅ CloudWatch | ✅ Advanced audit trail |
-| **Rate Limiting** | ❌ (use LiteLLM OSS) | ✅ Per-user/team |
-| **Model Routing** | ❌ (use LiteLLM OSS) | ✅ Advanced routing |
+| **OIDC/SSO** | Included issuer, audience, and claim validation | Verify roles and RBAC |
+| **Key Management** | Included auto-generation | Verify policy controls |
+| **Audit Logging** | CloudWatch integration | Verify audit scope and retention |
+| **Rate Limiting** | Use configured LiteLLM capabilities | Verify user/team controls |
+| **Model Routing** | Use configured LiteLLM capabilities | Verify routing features |
 | **Support** | Self-support | Enterprise support |
 
 ## Future Enhancements

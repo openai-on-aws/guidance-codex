@@ -11,7 +11,7 @@ import os
 import json
 import time
 import logging
-from functools import lru_cache, wraps
+from functools import wraps
 from typing import Dict, Optional
 
 import jwt
@@ -43,6 +43,8 @@ AWS_REGION = os.environ.get('AWS_REGION', 'us-west-2')
 # Validate required configuration
 required_vars = {
     'JWKS_URL': JWKS_URL,
+    'JWT_AUDIENCE': JWT_AUDIENCE,
+    'JWT_ISSUER': JWT_ISSUER,
     'LITELLM_MASTER_KEY': LITELLM_MASTER_KEY,
 }
 
@@ -50,25 +52,8 @@ missing_vars = [k for k, v in required_vars.items() if not v]
 if missing_vars:
     raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
-# Issuer and audience verification are optional (mirroring LiteLLM's own
-# native JWT auth, where JWT_AUDIENCE is optional and there is no dedicated
-# issuer check). They are STRONGLY recommended: without them, any token signed
-# by a key in the JWKS authenticates and mints a LiteLLM key. This is a real
-# risk on a shared / multi-tenant JWKS. Warn loudly when either is unset.
-if not JWT_ISSUER:
-    logger.warning(
-        "JWT_ISSUER is not set - issuer (iss) claim will NOT be verified. "
-        "Any token signed by a key in the JWKS will be accepted. "
-        "Set JWT_ISSUER to your IdP's issuer URL to close this gap."
-    )
-if not JWT_AUDIENCE:
-    logger.warning(
-        "JWT_AUDIENCE is not set - audience (aud) claim will NOT be verified. "
-        "Set JWT_AUDIENCE to the audience your IdP issues tokens for."
-    )
-
 # In-memory caches
-jwks_cache = TTLCache(maxsize=1, ttl=3600)  # Cache JWKS for 1 hour
+jwks_cache = TTLCache(maxsize=1, ttl=600)  # Bound key-rotation lag to 10 minutes
 user_key_cache = TTLCache(maxsize=1000, ttl=1800)  # Cache user keys for 30 minutes
 
 # DynamoDB client
@@ -88,20 +73,24 @@ session.mount('http://', HTTPAdapter(max_retries=retry))  # nosec # nosemgrep: p
 session.mount('https://', HTTPAdapter(max_retries=retry))
 
 
-@lru_cache(maxsize=1)
-def get_jwks():
+def get_jwks(force_refresh: bool = False):
     """
     Fetch and cache JWKS (JSON Web Key Set) from IdP.
 
     This is used to verify JWT signature.
     """
+    if not force_refresh and 'jwks' in jwks_cache:
+        return jwks_cache['jwks']
+
     try:
-        if JWKS_URL:
-            logger.info(f"Fetching JWKS from {JWKS_URL}")
-            response = session.get(JWKS_URL, timeout=10)
-            response.raise_for_status()
-            return response.json()
-        return None
+        logger.info(f"Fetching JWKS from {JWKS_URL}")
+        response = session.get(JWKS_URL, timeout=10)
+        response.raise_for_status()
+        jwks = response.json()
+        if not isinstance(jwks, dict) or not isinstance(jwks.get('keys'), list):
+            raise ValueError("JWKS response does not contain a keys array")
+        jwks_cache['jwks'] = jwks
+        return jwks
     except Exception as e:
         logger.warning(f"Failed to fetch JWKS: {e}")
         raise
@@ -121,44 +110,37 @@ def validate_jwt_token(token: str) -> Dict:
         ValueError: If token is invalid
     """
     try:
-        # If JWKS_URL is configured, use it for validation
-        if JWKS_URL:
-            jwks = get_jwks()
+        jwks = get_jwks()
 
-            # Get the key ID from token header
-            unverified_header = jwt.get_unverified_header(token)
-            kid = unverified_header.get('kid')
+        # Get the key ID from token header
+        unverified_header = jwt.get_unverified_header(token)
+        kid = unverified_header.get('kid')
 
-            if not kid:
-                raise ValueError("Token missing 'kid' in header")
+        if not kid:
+            raise ValueError("Token missing 'kid' in header")
 
-            # Find the matching key in JWKS
+        # Refresh once on an unknown key so IdP signing-key rotation does not
+        # require waiting for the normal cache TTL.
+        key = next((k for k in jwks.get('keys', []) if k.get('kid') == kid), None)
+        if not key:
+            jwks = get_jwks(force_refresh=True)
             key = next((k for k in jwks.get('keys', []) if k.get('kid') == kid), None)
-            if not key:
-                raise ValueError(f"Key with kid '{kid}' not found in JWKS")
+        if not key:
+            raise ValueError(f"Key with kid '{kid}' not found in JWKS")
 
-            # Decode and validate token
-            # Signature and expiry are always verified. Audience and issuer are
-            # verified only when configured (see the startup warnings above);
-            # this mirrors LiteLLM's own native JWT auth, where JWT_AUDIENCE is
-            # optional. Setting both is strongly recommended.
-            payload = jwt.decode(
-                token,
-                key=jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(key)),
-                algorithms=['RS256'],
-                audience=JWT_AUDIENCE if JWT_AUDIENCE else None,
-                issuer=JWT_ISSUER if JWT_ISSUER else None,
-                options={
-                    'verify_signature': True,
-                    'verify_exp': True,
-                    'verify_aud': bool(JWT_AUDIENCE),
-                    'verify_iss': bool(JWT_ISSUER),
-                }
-            )
-        else:
-            # No JWKS URL configured - REJECT request
-            logger.error("JWKS_URL not configured - cannot verify JWT tokens!")
-            raise ValueError("JWT validation requires JWKS_URL environment variable")
+        payload = jwt.decode(
+            token,
+            key=jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(key)),
+            algorithms=['RS256'],
+            audience=JWT_AUDIENCE,
+            issuer=JWT_ISSUER,
+            options={
+                'verify_signature': True,
+                'verify_exp': True,
+                'verify_aud': True,
+                'verify_iss': True,
+            }
+        )
 
         # Extract user information
         user_info = {
@@ -220,8 +202,7 @@ def get_cached_api_key(user_id: str) -> Optional[str]:
             return api_key
     except Exception as e:
         logger.error(f"Failed to get API key from DynamoDB: {e}")
-
-    return None
+        raise RuntimeError("User key store is unavailable") from e
 
 
 def cache_api_key(user_id: str, api_key: str, user_info: Dict):
@@ -233,10 +214,6 @@ def cache_api_key(user_id: str, api_key: str, user_info: Dict):
         api_key: LiteLLM API key
         user_info: Full user information from JWT
     """
-    # Update in-memory cache
-    user_key_cache[user_id] = api_key
-
-    # Update DynamoDB
     try:
         user_key_table.put_item(
             Item={
@@ -256,9 +233,11 @@ def cache_api_key(user_id: str, api_key: str, user_info: Dict):
                 'ttl': int(time.time()) + (90 * 86400),  # 90 days TTL
             }
         )
+        user_key_cache[user_id] = api_key
         logger.info(f"Cached API key in DynamoDB for user: {user_id}")
     except Exception as e:
         logger.error(f"Failed to cache API key in DynamoDB: {e}")
+        raise RuntimeError("Failed to persist the generated API key") from e
 
 
 def create_litellm_api_key(user_info: Dict) -> str:
@@ -315,10 +294,15 @@ def create_litellm_api_key(user_info: Dict) -> str:
 
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 409:
-            # Key already exists - try to fetch it
-            logger.warning(f"Key already exists for {user_info['email']}, attempting to fetch")
-            # TODO: Implement key lookup by user_id
-            raise Exception("Key already exists but cannot fetch - check DynamoDB cache")
+            # Another task can win a concurrent create. Give it time to persist
+            # the generated key in DynamoDB before returning an error.
+            logger.warning(f"Key already exists for {user_info['email']}; waiting for key mapping")
+            for _ in range(5):
+                time.sleep(0.2)
+                cached_key = get_cached_api_key(user_info['user_id'])
+                if cached_key:
+                    return cached_key
+            raise RuntimeError("Key exists upstream but no user mapping is available") from e
         raise Exception(f"Failed to create API key: {e}")
     except Exception as e:
         logger.error(f"Failed to create API key: {e}")
@@ -383,7 +367,32 @@ def requires_jwt(f):
 
 @app.route('/health', methods=['GET'])
 def health():
-    """Health check endpoint."""
+    """Readiness check for the upstream gateway and user key store."""
+    checks = {}
+
+    try:
+        response = session.get(f"{LITELLM_URL}/health/liveliness", timeout=5)
+        response.raise_for_status()
+        checks['litellm'] = 'healthy'
+    except Exception as e:
+        logger.warning(f"LiteLLM readiness check failed: {e}")
+        checks['litellm'] = 'unhealthy'
+
+    try:
+        user_key_table.load()
+        checks['dynamodb'] = 'healthy'
+    except Exception as e:
+        logger.warning(f"DynamoDB readiness check failed: {e}")
+        checks['dynamodb'] = 'unhealthy'
+
+    status = 'healthy' if all(value == 'healthy' for value in checks.values()) else 'unhealthy'
+    status_code = 200 if status == 'healthy' else 503
+    return jsonify({'status': status, 'service': 'jwt-middleware', 'checks': checks}), status_code
+
+
+@app.route('/health/live', methods=['GET'])
+def health_live():
+    """Process liveness check with no downstream dependency calls."""
     return jsonify({'status': 'healthy', 'service': 'jwt-middleware'}), 200
 
 

@@ -10,6 +10,8 @@ Parameters:
 Resources:
   UserKeyMappingKmsKey:
     Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Description: !Sub "${AWS::StackName} user key mapping table key"
       EnableKeyRotation: true
@@ -31,6 +33,8 @@ Resources:
 
   UserKeyMappingTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       TableName: !Ref TableName
       AttributeDefinitions:

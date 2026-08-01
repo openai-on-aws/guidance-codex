@@ -3,6 +3,11 @@ deployment/binaries/
 
 # Local gateway credentials (master key + DB password) — never commit
 deployment/litellm/.env.gateway
+deployment/litellm/.env.deploy
+deployment/litellm/.deploy-state
+deployment/idc/.env.deploy
+deployment/idc/.deploy-state
+deployment/portkey/.env.deploy
 
 # Rendered per-developer sidecar configs (contain identity/org attributes)
 # produced by generate-sidecar-config.sh — never commit
@@ -11,3 +16,13 @@ deployment/templates/otel-local-config-*.yaml
 # Python test artifacts (jwt-middleware unit tests)
 __pycache__/
 *.pyc
+
+# Local editorial working files
+/docs/BLOG_*.md
+
+# Local walkthrough screenshots, recordings, and browser traces
+/output/playwright/
+/.playwright-cli/
+
+# Local blog review exports (Word, PDF, and render QA)
+/output/blog/

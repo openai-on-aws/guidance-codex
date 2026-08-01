@@ -1,6 +1,7 @@
 # Quick Start: LLM Gateway Pattern
 
-Deploy Codex on Bedrock with an OpenAI-compatible LLM gateway for hard quota enforcement, rate limiting, and centralized policy control.
+Connect Codex to models on Bedrock through a Responses-compatible LLM gateway
+for hard quota enforcement, rate limiting, and centralized policy control.
 
 **Use this pattern if:**
 - You need hard per-user/per-team budget limits (request blocking)
@@ -32,24 +33,35 @@ Corporate IdP (Okta/Azure) → OIDC/JWT → LLM Gateway → Amazon Bedrock
 
 ## Choose Your Gateway
 
-Any OpenAI-compatible gateway that can call Amazon Bedrock will work. Choose the one that matches your operational posture:
+Start with the gateway whose documented and tested contract matches your
+operational posture. Bedrock support by itself is not sufficient; the gateway
+must preserve the Responses API behavior listed below.
 
-### AWS-Maintained Reference Implementation
+### Repository Reference Implementation
 
 | Gateway | Implementation Guide | Best For |
 |---------|---------------------|----------|
-| **LiteLLM** | [QUICKSTART_LLM_GATEWAY_LITELLM.md](QUICKSTART_LLM_GATEWAY_LITELLM.md) | Organizations new to LLM gateways, learning CloudFormation deployment patterns |
+| **LiteLLM** | [QUICKSTART_LLM_GATEWAY_LITELLM.md](QUICKSTART_LLM_GATEWAY_LITELLM.md) | Primary enterprise walkthrough for centralized controls |
+| **Portkey** | [QUICKSTART_LLM_GATEWAY_PORTKEY.md](QUICKSTART_LLM_GATEWAY_PORTKEY.md) | Managed or hybrid gateway evaluation |
+| **Cross-gateway decision** | [ENTERPRISE_GATEWAY_GUIDANCE.md](ENTERPRISE_GATEWAY_GUIDANCE.md) | Platform teams comparing controls and contract evidence |
 
 **Deployment:** ECS Fargate + Amazon RDS for PostgreSQL  
 **Features:** Budget limits, RPM/TPM limits, model routing, team quotas, admin API  
-**Setup time:** 15-20 minutes  
-**Status:** Reference implementation — requires security hardening for production use (see implementation guide)  
+**Status:** Hardened reference baseline; customer landing-zone and operational validation still required
 
 ---
 
 ### Other Gateway Options
 
-Any OpenAI-compatible gateway that integrates with Amazon Bedrock can be used with this guidance. The gateway must meet the minimum requirements listed in the [Gateway Requirements](#gateway-requirements) section below.
+Any Responses-compatible gateway that integrates with the intended Amazon
+Bedrock API can be evaluated with this guidance. It is supported by this
+repository only after it meets the [Gateway Requirements](#gateway-requirements)
+and passes the executable contract probe.
+
+Use the [Portkey Quick Start](QUICKSTART_LLM_GATEWAY_PORTKEY.md) for its current
+Model Catalog flow and the
+[Enterprise Gateway Guidance](ENTERPRISE_GATEWAY_GUIDANCE.md) for the
+compatibility matrix and production gate.
 
 ---
 
@@ -58,18 +70,21 @@ Any OpenAI-compatible gateway that integrates with Amazon Bedrock can be used wi
 Any gateway must meet these minimum requirements:
 
 ### Technical Requirements
-- ✅ **OpenAI API compatibility** — implements `/v1/responses` for Codex and GPT-5.x workloads (optionally `/v1/chat/completions` for chat-style aliases)
-- ✅ **Responses field fidelity** — preserves Codex/OpenAI request fields such as `reasoning.effort`, `text.verbosity`, `prompt_cache_key`, `previous_response_id`, and `phase` instead of silently dropping them
-- ✅ **Bedrock integration** — can call Amazon Bedrock APIs (requires IAM role)
-- ✅ **Gateway-managed upstream auth** — if proxying Bedrock Mantle, refreshes upstream bearer tokens inside the gateway rather than depending on a manually rotated static 12-hour token
-- ✅ **Authentication** — supports API keys or JWT/OIDC tokens
-- ✅ **AWS deployment** — runs on ECS, EKS, EC2, Lambda, or hybrid
+- **Responses compatibility** — implements `/v1/responses`, including streaming
+- **Responses field fidelity** — preserves `reasoning.effort`,
+  `text.verbosity`, `prompt_cache_key`, `previous_response_id`, and `phase`
+  instead of silently dropping them
+- **Bedrock integration** — can call the exact Bedrock API selected for the route
+- **Gateway-managed upstream auth** — refreshes Bedrock Mantle bearer tokens
+  inside the gateway instead of depending on a manually rotated static token
+- **Authentication** — supports API keys or JWT/OIDC tokens
+- **AWS deployment** — has an approved managed, self-hosted, or hybrid data path
 
-### Operational Requirements (Recommended)
-- ✅ **Quota enforcement** — per-user or per-team budget limits with automatic blocking
-- ✅ **Rate limiting** — RPM and TPM controls
-- ✅ **Admin API** — programmatic key generation and quota management
-- ✅ **Telemetry** — metrics, logs, or traces for observability
+### Operational Requirements
+- **Quota enforcement** — per-user or per-team budget limits with automatic blocking
+- **Rate limiting** — RPM and TPM controls
+- **Admin API** — programmatic key generation and quota management
+- **Telemetry** — metrics, logs, or traces for observability
 
 ---
 
@@ -101,7 +116,7 @@ gateway path.)
 
 Follow your chosen gateway's implementation guide:
 - **LiteLLM**: Build Docker image → push to ECR → deploy ECS stack
-- **Portkey**: Sign up → create virtual keys → configure Bedrock integration
+- **Portkey**: Create a workspace key -> configure a Model Catalog Bedrock integration -> run the strict contract probe
 - **Kong**: Deploy gateway → configure Bedrock upstream → enable plugins
 - **Bifrost**: Deploy to ECS/EKS → configure config.yaml → point at Bedrock
 - **Helicone**: Sign up → configure proxy → add Bedrock as provider
@@ -122,21 +137,21 @@ model = "gpt-5.5"  # Prefer the latest GPT-5 family model your gateway exposes
 [model_providers.my-gateway]
 name = "My LLM Gateway"
 base_url = "<gateway-endpoint>"  # Paste the exact GatewayEndpoint value from your admin, including scheme and /v1
-env_key = "OPENAI_API_KEY"
 wire_api = "responses"  # Optional but explicit; custom providers default to Responses
+
+[model_providers.my-gateway.auth]
+command = "/absolute/path/to/your-secret-or-token-resolver"
+args = ["print-gateway-token"]
+refresh_interval_ms = 300000
 ```
 
 Keep gateway provider settings in user-level `~/.codex/config.toml`; Codex
 ignores `model_provider` and `model_providers` in project-local
 `.codex/config.toml` files. If your gateway exposes different aliases, swap the
-`model` string accordingly. If your gateway expects OpenAI authentication
-instead of a gateway-specific API key, use `requires_openai_auth = true`
-instead of `env_key`, per the Codex auth docs for custom providers.
+`model` string accordingly. For a shell-provided development key, replace the
+`auth` table with `env_key = "GATEWAY_API_KEY"`.
 
 ```bash
-# Set API key (get from gateway admin)
-export OPENAI_API_KEY=<your-api-key>
-
 # Test
 codex exec "Hello world"
 ```
@@ -148,12 +163,12 @@ For advanced configuration, see [OpenAI Codex documentation](https://developers.
 After setup, the everyday loop is just:
 
 ```bash
-export OPENAI_API_KEY=<your-gateway-key-or-oidc-token>   # if not already in your shell profile
-codex exec "..."                                          # Codex forwards it as the bearer
+codex exec "..."
 ```
 
-- **Static gateway API key** (e.g. a LiteLLM-issued `sk-…`): set it once in your
-  shell profile; it lasts until the admin rotates or revokes it — no per-session step.
+- **Static gateway API key** (for example, a LiteLLM-issued key): resolve it
+  from an approved secret store rather than committing it or placing it in shell
+  startup files.
 - **OIDC/JWT to the gateway:** the token is short-lived. For hands-off refresh, point
   the provider at a token-fetch `auth` command (`[model_providers.<name>.auth]` with
   `command` + `refresh_interval_ms`) — Codex runs it and refreshes automatically. With

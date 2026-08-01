@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
+
 import glob
 import logging
 import os
@@ -7,6 +9,7 @@ import sys
 import threading
 import time
 from typing import Iterable
+from urllib.parse import quote_plus
 
 from aws_bedrock_token_generator import provide_token
 
@@ -48,6 +51,28 @@ def _resolve_region() -> str:
         or os.environ.get("AWS_REGION")
         or os.environ.get("AWS_DEFAULT_REGION")
         or DEFAULT_REGION
+    )
+
+
+def _configure_database_url() -> None:
+    if os.environ.get("DATABASE_URL"):
+        return
+
+    required = ("DB_HOST", "DB_USERNAME", "DB_PASSWORD")
+    missing = [name for name in required if not os.environ.get(name)]
+    if missing:
+        raise RuntimeError(
+            "DATABASE_URL is unset and database connection fields are missing: "
+            + ", ".join(missing)
+        )
+
+    username = quote_plus(os.environ.pop("DB_USERNAME"))
+    password = quote_plus(os.environ.pop("DB_PASSWORD"))
+    host = os.environ["DB_HOST"]
+    port = os.environ.get("DB_PORT", "5432")
+    database = os.environ.get("DB_NAME", "litellm")
+    os.environ["DATABASE_URL"] = (
+        f"postgresql://{username}:{password}@{host}:{port}/{database}"
     )
 
 
@@ -133,6 +158,7 @@ def main(argv: list[str]) -> int:
     )
 
     _validate_proxy_args(argv)
+    _configure_database_url()
 
     refresh_interval_seconds = _coerce_positive_int(
         os.environ.get("BEDROCK_TOKEN_REFRESH_INTERVAL_SECONDS"),

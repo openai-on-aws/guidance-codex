@@ -35,8 +35,8 @@ Collect the following from your corporate IdP:
 | Value | Description |
 |-------|-------------|
 | JWKS URL | `https://your-tenant.okta.com/.well-known/jwks.json` |
-| JWT Audience | Client ID (optional — leave empty to skip audience validation) |
-| JWT Issuer | Issuer URL (optional — leave empty to skip issuer validation) |
+| JWT Audience | Client ID (required) |
+| JWT Issuer | Issuer URL (required) |
 
 These map directly to the `JwksUrl`, `JwtAudience`, and `JwtIssuer` parameters
 on the `litellm-ecs.yaml` stack.
@@ -46,7 +46,7 @@ on the `litellm-ecs.yaml` stack.
 ```bash
 export JWT_REPO=codex-jwt-middleware
 export JWT_IMAGE_TAG=v1
-export JWT_IMAGE="$ECR_REGISTRY/$JWT_REPO:$JWT_IMAGE_TAG"
+export JWT_IMAGE_TAGGED="$ECR_REGISTRY/$JWT_REPO:$JWT_IMAGE_TAG"
 
 aws ecr create-repository \
   --repository-name "$JWT_REPO" \
@@ -56,15 +56,23 @@ aws ecr create-repository \
 
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  --tag "$JWT_IMAGE" \
+  --tag "$JWT_IMAGE_TAGGED" \
   --file deployment/litellm/jwt-middleware/Dockerfile \
   --push \
   deployment/litellm/jwt-middleware
+
+export JWT_IMAGE_DIGEST=$(aws ecr describe-images \
+  --repository-name "$JWT_REPO" \
+  --image-ids imageTag="$JWT_IMAGE_TAG" \
+  --region "$AWS_REGION" \
+  --query 'imageDetails[0].imageDigest' \
+  --output text)
+export JWT_IMAGE="$ECR_REGISTRY/$JWT_REPO@$JWT_IMAGE_DIGEST"
 ```
 
 **Step 3: Build and push the LiteLLM image**
 
-Follow Step 2 of [QUICKSTART_LLM_GATEWAY.md](QUICKSTART_LLM_GATEWAY.md#step-2-build-and-push-the-litellm-image)
+Follow Step 2 of [QUICKSTART_LLM_GATEWAY_LITELLM.md](QUICKSTART_LLM_GATEWAY_LITELLM.md#step-2-build-and-push-litellm-image)
 to build and push `$LITELLM_IMAGE`.
 
 **Step 4: Deploy the user-key-mapping DynamoDB stack**
@@ -82,8 +90,6 @@ aws cloudformation deploy \
 
 ```bash
 export GATEWAY_STACK=codex-litellm-gateway
-export LITELLM_MASTER_KEY="sk-litellm-$(openssl rand -hex 24)"
-export DB_PASSWORD="$(openssl rand -base64 24 | tr -d '/+=')"
 
 aws cloudformation deploy \
   --stack-name "$GATEWAY_STACK" \
@@ -92,9 +98,7 @@ aws cloudformation deploy \
   --region "$AWS_REGION" \
   --parameter-overrides \
       NetworkingStackName=codex-networking \
-      LiteLLMMasterKey="$LITELLM_MASTER_KEY" \
       DBUsername=litellm \
-      DBPassword="$DB_PASSWORD" \
       AwsRegion="$BEDROCK_REGION" \
       LiteLLMImage="$LITELLM_IMAGE" \
       AlbCertificateArn="$ALB_CERTIFICATE_ARN" \
@@ -107,8 +111,8 @@ aws cloudformation deploy \
       UserKeyMappingStackName=codex-user-key-mapping
 ```
 
-The stack output `GatewayEndpoint` is your gateway base URL; the self-service
-portal is served at `<GatewayEndpoint>/api/my-key`.
+The stack output `GatewayEndpoint` is the Responses API base URL. The
+self-service portal is served at `<GatewayAdminEndpoint>/api/my-key`.
 
 ---
 
@@ -179,20 +183,12 @@ curl https://<gateway-url>/v1/responses \
 
 ---
 
-## After Getting Key: Set Environment Variable
+## After Getting Key: Configure Runtime Resolution
 
-```bash
-# Set for current shell
-export OPENAI_API_KEY=sk-litellm-xxxxxxxxxxxxx  # gitleaks:allow
-
-# Add to shell profile for persistence:
-echo 'export OPENAI_API_KEY=sk-litellm-xxxxxxxxxxxxx  # gitleaks:allow' >> ~/.zshrc  # macOS
-echo 'export OPENAI_API_KEY=sk-litellm-xxxxxxxxxxxxx  # gitleaks:allow' >> ~/.bashrc # Linux
-
-# Restart your shell or source the profile
-source ~/.zshrc  # macOS
-source ~/.bashrc # Linux
-```
+Store the issued key in your organization's approved secret store. Configure
+the user-level Codex provider with a command-backed `auth` resolver so the key
+is supplied at runtime rather than committed or persisted in shell startup
+files. See the [LiteLLM Codex configuration](QUICKSTART_LLM_GATEWAY_LITELLM.md#codex-configuration).
 
 ---
 
@@ -255,9 +251,9 @@ Fix:
 # Check LiteLLM is healthy
 curl http://localhost:4000/health/liveliness
 
-# Verify master key in Secrets Manager
-aws secretsmanager get-secret-value \
-  --secret-id codex-litellm-gateway/litellm-master-key \
+# Verify the secret exists without retrieving its value
+aws secretsmanager describe-secret \
+  --secret-id codex-litellm-gateway/litellm-secrets \
   --region us-west-2
 
 # Check container logs
@@ -315,20 +311,23 @@ aws logs tail /ecs/litellm --follow --region us-west-2 --filter-pattern "jwt-mid
 
 ---
 
-## Alternative: Upgrade to LiteLLM Enterprise
+## Alternative: Evaluate Licensed LiteLLM Features
 
-If you need advanced features not in custom middleware:
+If you need vendor-supported identity or policy features not in the custom
+middleware, compare the current product tier and contract. Packaging changes,
+so treat this table as evaluation criteria rather than an entitlement claim:
 
-| Feature | Custom JWT Middleware | LiteLLM Enterprise |
+| Feature | Custom JWT Middleware | Licensed offering to verify |
 |---------|----------------------|-------------------|
-| **Setup** | 1-2 hours | 1 hour |
-| **OIDC/SSO** | ✅ Basic | ✅ Advanced (roles, RBAC) |
-| **Key Management** | ✅ Auto-generation | ✅ Advanced policies |
-| **Rate Limiting** | Use LiteLLM OSS features | ✅ Per-user/team |
-| **Model Routing** | Use LiteLLM OSS features | ✅ Advanced routing |
+| **Implementation** | Customer-owned integration | Verify vendor onboarding scope |
+| **OIDC/SSO** | Included issuer, audience, and claim validation | Verify roles and RBAC |
+| **Key Management** | Included auto-generation | Verify policy controls |
+| **Rate Limiting** | Use configured LiteLLM capabilities | Verify user/team controls |
+| **Model Routing** | Use configured LiteLLM capabilities | Verify routing features |
 | **Support** | Self-support | Enterprise support |
 
-**Recommendation:** Start with custom middleware, upgrade to Enterprise later if you need vendor support or advanced RBAC.
+Choose only after validating the same issuer, audience, key-rotation,
+deprovisioning, readiness, and audit requirements.
 
 ---
 

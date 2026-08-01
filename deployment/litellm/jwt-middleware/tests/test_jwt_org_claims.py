@@ -13,6 +13,7 @@ from unittest.mock import patch, MagicMock
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
 import jwt as pyjwt
+import requests
 
 
 def _make_rsa_keypair():
@@ -32,6 +33,8 @@ def _sign(claims: dict) -> str:
     base = {
         "sub": "user-123",
         "email": "alice@example.com",
+        "aud": "codex-gateway",
+        "iss": "https://idp.example.com/",
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600,
     }
@@ -65,38 +68,22 @@ JWKS = _jwks_for(PRIVATE_KEY)
 
 def _load_app():
     """Import app with required env vars set and AWS mocked."""
-    import importlib, sys, os
+    import os
 
     os.environ.setdefault("JWKS_URL", "https://idp.example.com/.well-known/jwks.json")
+    os.environ.setdefault("JWT_AUDIENCE", "codex-gateway")
+    os.environ.setdefault("JWT_ISSUER", "https://idp.example.com/")
     os.environ.setdefault("LITELLM_MASTER_KEY", "sk-test")
 
-    mock_boto3 = MagicMock()
-    mock_boto3.resource.return_value.Table.return_value = MagicMock()
+    import pathlib
+    import importlib.util
 
-    mock_requests = MagicMock()
-    mock_requests_adapters = MagicMock()
-    mock_requests_adapters.HTTPAdapter = MagicMock
-    mock_requests.adapters = mock_requests_adapters
-
-    mock_urllib3 = MagicMock()
-    mock_urllib3_util = MagicMock()
-    mock_urllib3_util_retry = MagicMock()
-    mock_urllib3_util_retry.Retry = MagicMock
-
-    sys.modules.setdefault("boto3", mock_boto3)
-    sys.modules.setdefault("requests", mock_requests)
-    sys.modules.setdefault("requests.adapters", mock_requests_adapters)
-    sys.modules.setdefault("urllib3", mock_urllib3)
-    sys.modules.setdefault("urllib3.util", mock_urllib3_util)
-    sys.modules.setdefault("urllib3.util.retry", mock_urllib3_util_retry)
-    sys.modules.setdefault("flask", MagicMock())
-    sys.modules.setdefault("cachetools", MagicMock())
-
-    import pathlib, importlib.util
     app_path = pathlib.Path(__file__).parents[1] / "app.py"
     spec = importlib.util.spec_from_file_location("jwt_middleware_app", app_path)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    with patch("boto3.resource") as resource:
+        resource.return_value.Table.return_value = MagicMock()
+        spec.loader.exec_module(mod)
     return mod
 
 
@@ -233,6 +220,77 @@ class TestOrgClaimExtraction(unittest.TestCase):
         info = self._validate({"department": "Eng"})
         self.assertEqual(info["user_id"], "user-123")
         self.assertEqual(info["email"], "alice@example.com")
+
+    def test_rejects_wrong_audience(self):
+        with self.assertRaisesRegex(ValueError, "Invalid audience"):
+            self._validate({"aud": "another-service"})
+
+    def test_rejects_wrong_issuer(self):
+        with self.assertRaisesRegex(ValueError, "Invalid issuer"):
+            self._validate({"iss": "https://attacker.example.com/"})
+
+    def test_refreshes_jwks_once_for_unknown_key(self):
+        token = _sign({})
+        with patch.object(
+            self.app,
+            "get_jwks",
+            side_effect=[{"keys": []}, JWKS],
+        ) as get_jwks:
+            info = self.app.validate_jwt_token(token)
+
+        self.assertEqual(info["user_id"], "user-123")
+        get_jwks.assert_any_call()
+        get_jwks.assert_any_call(force_refresh=True)
+
+    def test_duplicate_key_waits_for_concurrent_mapping(self):
+        response = MagicMock(status_code=409)
+        response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+            response=response
+        )
+        user_info = {
+            "user_id": "user-123",
+            "email": "alice@example.com",
+            "name": "Alice",
+            "groups": [],
+        }
+        with (
+            patch.object(self.app.session, "post", return_value=response),
+            patch.object(
+                self.app,
+                "get_cached_api_key",
+                side_effect=[None, None, "sk-existing"],
+            ),
+            patch.object(self.app.time, "sleep"),
+        ):
+            key = self.app.create_litellm_api_key(user_info)
+
+        self.assertEqual(key, "sk-existing")
+
+    def test_readiness_reports_dependency_health(self):
+        upstream = MagicMock()
+        with (
+            patch.object(self.app.session, "get", return_value=upstream),
+            patch.object(self.app.user_key_table, "load"),
+        ):
+            response = self.app.app.test_client().get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["checks"]["litellm"], "healthy")
+        self.assertEqual(response.get_json()["checks"]["dynamodb"], "healthy")
+
+    def test_readiness_fails_when_upstream_is_unavailable(self):
+        with (
+            patch.object(
+                self.app.session,
+                "get",
+                side_effect=requests.exceptions.ConnectionError("unavailable"),
+            ),
+            patch.object(self.app.user_key_table, "load"),
+        ):
+            response = self.app.app.test_client().get("/health")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.get_json()["checks"]["litellm"], "unhealthy")
 
 
 if __name__ == "__main__":
