@@ -6,7 +6,9 @@ IDC_SCRIPT := deployment/scripts/idc-stack.sh
 .PHONY: help litellm-check litellm-build litellm-plan litellm-deploy \
 	litellm-status litellm-provision-key litellm-codex-config litellm-validate \
 	litellm-cleanup-plan litellm-cleanup \
-	portkey-aws-check portkey-aws-plan portkey-aws-deploy portkey-aws-status \
+	portkey-cluster-plan portkey-cluster-deploy portkey-cluster-cleanup \
+	portkey-aws-check portkey-aws-plan portkey-aws-deploy portkey-helm-plan \
+	portkey-helm-deploy portkey-status \
 	portkey-aws-cleanup-plan portkey-aws-cleanup portkey-check \
 	portkey-codex-config portkey-validate portkey-codex-validate \
 	portkey-auth-negative \
@@ -22,8 +24,10 @@ help:
 		'  make litellm-status litellm-provision-key litellm-codex-config litellm-validate' \
 		'  make litellm-cleanup-plan litellm-cleanup' \
 		'' \
-		'Portkey hosted Bedrock Mantle evaluation:' \
-		'  make portkey-aws-check portkey-aws-plan portkey-aws-deploy portkey-aws-status' \
+		'Portkey Hybrid on Amazon EKS:' \
+		'  make portkey-cluster-plan portkey-cluster-deploy' \
+		'  make portkey-aws-check portkey-aws-plan portkey-aws-deploy' \
+		'  make portkey-helm-plan portkey-helm-deploy portkey-status' \
 		'  make portkey-check portkey-codex-config portkey-validate portkey-codex-validate' \
 		'  make portkey-auth-negative portkey-aws-cleanup-plan portkey-aws-cleanup' \
 		'' \
@@ -61,6 +65,15 @@ litellm-cleanup-plan:
 litellm-cleanup:
 	@$(LITELLM_SCRIPT) cleanup
 
+portkey-cluster-plan:
+	@$(PORTKEY_SCRIPT) cluster-plan
+
+portkey-cluster-deploy:
+	@$(PORTKEY_SCRIPT) cluster-deploy
+
+portkey-cluster-cleanup:
+	@$(PORTKEY_SCRIPT) cluster-cleanup
+
 portkey-aws-check:
 	@$(PORTKEY_SCRIPT) aws-check
 
@@ -70,7 +83,13 @@ portkey-aws-plan:
 portkey-aws-deploy:
 	@$(PORTKEY_SCRIPT) deploy
 
-portkey-aws-status:
+portkey-helm-plan:
+	@$(PORTKEY_SCRIPT) helm-plan
+
+portkey-helm-deploy:
+	@$(PORTKEY_SCRIPT) helm-deploy
+
+portkey-status:
 	@$(PORTKEY_SCRIPT) status
 
 portkey-aws-cleanup-plan:

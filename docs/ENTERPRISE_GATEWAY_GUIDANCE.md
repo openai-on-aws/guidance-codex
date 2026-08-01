@@ -40,11 +40,11 @@ customer's retention policy.
 | Capability | LiteLLM reference | Portkey evaluation |
 |------------|-------------------|--------------------|
 | Responses endpoint | Live contract probe passed in `us-east-1` | Portkey documents `/v1/responses`; strict live probe still requires a workspace key |
-| Bedrock Mantle GPT-5.x | Configured with `bedrock_mantle/` and server-side token refresh | Dedicated `bedrock-mantle` provider and scoped IAM role are executable; live workspace evidence is pending |
+| Bedrock Mantle GPT-5.x | Configured with `bedrock_mantle/` and server-side token refresh | Dedicated `bedrock-mantle` provider uses the EKS service role; live workspace evidence is pending |
 | Classic Bedrock assumed role | ECS task role | Documented Portkey integration pattern |
 | OIDC/JWT | Included middleware; compare licensed LiteLLM features against current vendor terms | Verify Portkey workspace/service-account controls for the selected tier |
 | Per-user/team budgets | Vendor documented; prove blocking with customer policy | Vendor documented; prove blocking with customer policy |
-| Customer-operated data plane | ECS reference stack | Hybrid ECS requires vendor-issued image credentials, client auth, and organization ID |
+| Customer-operated data plane | ECS reference stack | EKS/Helm data plane with S3 logs and IRSA; vendor-issued image credentials, client auth, and organization ID are required |
 | Promotion gate | CI plus Responses contract probe | Same probe, plus vendor-specific integration tests |
 
 `Documented` means the vendor describes the feature. `Verified` means this
@@ -95,12 +95,14 @@ Use Portkey when the customer prefers a managed control plane or an evaluated
 hybrid deployment and wants vendor-provided policy, analytics, and virtual-key
 workflows.
 
-Start with a non-production workspace and one test identity. Portkey's current
+Start with a non-production workspace and one test identity. Deploy the
+Enterprise gateway to EKS using the repository Helm workflow. Portkey's current
 Model Catalog replaces the older virtual-key-first flow. Select the dedicated
-**Bedrock Mantle** provider with assumed-role authentication; classic
+**Bedrock Mantle** provider with **Service Role (EKS / IRSA)** authentication; classic
 **Bedrock** uses Converse/Invoke and its Responses adapter does not provide
-stateful `previous_response_id`. The repository CloudFormation path requires
-an external ID and limits access to `openai.gpt-5.5` in `us-east-1`.
+stateful `previous_response_id`. The repository CloudFormation path trusts only
+the configured Kubernetes service account and limits it to `openai.gpt-5.5` in
+`us-east-1`.
 
 A Portkey evaluation can use Codex custom-provider bearer authentication:
 
@@ -109,8 +111,8 @@ model = "@bedrock-mantle-validation/openai.gpt-5.5"
 model_provider = "portkey"
 
 [model_providers.portkey]
-name = "Portkey"
-base_url = "https://api.portkey.ai/v1"
+name = "Portkey Hybrid on AWS"
+base_url = "https://portkey-gateway.example.com/v1"
 wire_api = "responses"
 env_key = "PORTKEY_API_KEY"
 ```
@@ -123,7 +125,7 @@ The repository probe accepts the same secret headers without putting their
 values in command-line arguments:
 
 ```bash
-export GATEWAY_BASE_URL=https://api.portkey.ai/v1
+export GATEWAY_BASE_URL=https://portkey-gateway.example.com/v1
 export PORTKEY_API_KEY=<secret>
 export GATEWAY_MODEL=@<bedrock-mantle-provider-slug>/openai.gpt-5.5
 
@@ -145,7 +147,7 @@ false pass. See the [Portkey Quick Start](QUICKSTART_LLM_GATEWAY_PORTKEY.md).
 Do not mark the Portkey route production-ready until the contract probe passes
 with the intended Bedrock GPT-5.x model and the following evidence is captured:
 
-- AWS CloudTrail or vendor logs identify the assumed role and target service.
+- AWS CloudTrail identifies the EKS IRSA role and target service.
 - A deliberately exceeded budget returns the expected blocking response.
 - Revoking a user or virtual key takes effect within the agreed SLA.
 - Prompt, response, and trace retention match the customer's data policy.

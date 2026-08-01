@@ -153,7 +153,8 @@ class TestPortkeyDeployment(unittest.TestCase):
         return {
             **os.environ,
             "PORTKEY_ENV_FILE": str(REPO_ROOT / "does-not-exist"),
-            "PORTKEY_BASE_URL": "https://api.portkey.ai/v1",
+            "AWS_REGION": "us-east-1",
+            "PORTKEY_BASE_URL": "https://portkey.internal.example/v1",
             "PORTKEY_PROVIDER_SLUG": "bedrock-mantle-validation",
             "PORTKEY_MODEL": "@bedrock-mantle-validation/openai.gpt-5.5",
             "PORTKEY_API_KEY": "do-not-print-this-secret",
@@ -188,14 +189,43 @@ class TestPortkeyDeployment(unittest.TestCase):
         self.assertIn("openai.gpt-5.5", result.stderr)
         self.assertNotIn("do-not-print-this-secret", result.stdout + result.stderr)
 
-    def test_portkey_role_requires_external_id_and_scopes_mantle(self):
+    def test_portkey_irsa_role_scopes_service_account_and_mantle(self):
         template = (
-            REPO_ROOT / "deployment" / "portkey" / "bedrock-mantle-role.yaml"
+            REPO_ROOT / "deployment" / "portkey" / "hybrid-infrastructure.yaml"
         ).read_text(encoding="utf-8")
-        self.assertIn("sts:ExternalId: !Ref ExternalId", template)
+        self.assertIn("AWS::IAM::ManagedPolicy", template)
+        script = (SCRIPTS_DIR / "portkey-stack.sh").read_text(encoding="utf-8")
+        self.assertIn("eksctl create iamserviceaccount", script)
         self.assertIn("bedrock-mantle:Model: !Ref MantleModelId", template)
         self.assertIn("bedrock-mantle:CreateInference", template)
         self.assertNotIn("bedrock:InvokeModel", template)
+
+    def test_portkey_hybrid_values_do_not_contain_committed_secrets(self):
+        values = (
+            REPO_ROOT / "deployment" / "portkey" / "values.yaml.tmpl"
+        ).read_text(encoding="utf-8")
+        self.assertIn("__PORTKEY_CLIENT_AUTH__", values)
+        self.assertIn("__PORTKEY_DOCKER_PASSWORD__", values)
+        self.assertNotIn("api.portkey.ai/v1", values)
+
+    def test_portkey_exit_traps_do_not_reference_expired_locals(self):
+        script = (SCRIPTS_DIR / "portkey-stack.sh").read_text(encoding="utf-8")
+        self.assertNotIn("trap 'rm -f \"$", script)
+        self.assertNotIn("trap 'stop_tunnel; rm -rf \"$", script)
+
+    def test_portkey_check_requires_v1_gateway_url(self):
+        environ = self.portkey_environment()
+        environ["PORTKEY_BASE_URL"] = "https://portkey.internal.example"
+        result = subprocess.run(
+            ["bash", str(SCRIPTS_DIR / "portkey-stack.sh"), "check"],
+            cwd=REPO_ROOT,
+            env=environ,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("/v1", result.stderr)
 
 
 class TestLiteLLMPreflight(unittest.TestCase):

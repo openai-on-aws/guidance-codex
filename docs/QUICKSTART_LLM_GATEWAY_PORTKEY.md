@@ -1,217 +1,203 @@
-# Quick Start: Portkey with Bedrock Mantle
+# Quick Start: Portkey Hybrid on AWS with Bedrock Mantle
 
-Evaluate Codex through Portkey's hosted gateway and Amazon Bedrock Mantle in
-`us-east-1`. This walkthrough fixes the upstream model at `openai.gpt-5.5`,
-uses Portkey assumed-role authentication, and exercises the Responses protocol
-that Codex uses for reasoning and tools.
+Deploy Portkey's Enterprise data plane to Amazon EKS, configure its dedicated
+`bedrock-mantle` provider for `openai.gpt-5.5` in `us-east-1`, and validate a
+real Codex workflow through the AWS-hosted gateway.
 
-Hybrid or self-hosted Portkey is a separate vendor-assisted deployment and is
-not part of this walkthrough.
+This path keeps model traffic, the gateway cache, and request/response logs in
+the customer AWS account. Portkey's managed control plane still distributes
+configuration and provides administration. A fully air-gapped Portkey control
+plane is a separate vendor-assisted Enterprise deployment.
 
-## Evidence Status
+Portkey's supported [EKS deployment](https://portkey.ai/docs/self-hosting/hybrid-deployments/aws/eks)
+requires licensed images and a client-auth license supplied by Portkey.
 
-| Layer | Status | Evidence |
-|---|---|---|
-| AWS role deployment | Executable | CloudFormation and Make targets provision a region- and model-scoped role with an external ID |
-| Codex custom provider | Verified offline | Generated config uses environment-backed bearer auth and `wire_api = "responses"` |
-| Portkey Responses endpoint | Vendor documented | Hosted `/v1/responses` supports SSE, reasoning, and function tools |
-| Portkey `bedrock-mantle` provider | Vendor documented | Routes to `bedrock-mantle.<region>.api.aws` and supports assumed-role authentication |
-| Stateful continuation | AWS documented | Mantle supports stored Responses and `previous_response_id`; the live probe verifies semantics |
-| Live Portkey workspace | Requires credentials | Run the live targets below with a non-production workspace and AWS sandbox |
-
-Do not call this route production-ready until the strict probe, a real
-`codex exec`, identity attribution, policy enforcement, and AWS audit evidence
-all pass. A failure is evidence to preserve, not a reason to weaken the probe.
-
-## Classic Bedrock Versus Bedrock Mantle
-
-Portkey exposes two distinct provider types:
-
-- **Bedrock** uses the classic Bedrock runtime and Converse/Invoke APIs. In
-  Portkey's Responses adapter, `previous_response_id` is not stateful.
-- **Bedrock Mantle** uses the OpenAI-compatible Mantle endpoint, including
-  native `/v1/responses`. This is the provider required by this walkthrough.
-
-Do not select classic **Bedrock** in Model Catalog for a GPT-5.x Codex test.
-The role in this repository grants only `bedrock-mantle:*` operations and does
-not grant `bedrock:InvokeModel*`.
-
-## Request Flow
+## Architecture
 
 ```text
 Codex
-  -> Portkey hosted /v1/responses
-  -> workspace API-key authentication and policy
-  -> Bedrock Mantle provider assumes the scoped AWS role
-  -> bedrock-mantle.us-east-1.api.aws/v1/responses
-  -> openai.gpt-5.5 returns reasoning, text, or a function call
-  -> Codex runs local tools in its sandbox and continues the Responses loop
+  -> AWS NLB or kubectl port-forward /v1/responses
+  -> Portkey Enterprise gateway on EKS
+     -> local Redis cache
+     -> S3 request/response log store
+     -> EKS IRSA service role
+  -> bedrock-mantle.us-east-1.api.aws
+  -> openai.gpt-5.5
+
+Portkey control plane
+  -> configuration sync to the AWS data plane
 ```
 
-Portkey governs model traffic. It does not run the Codex process, shell, or
-local tools.
+Portkey governs inference traffic only. Codex still runs locally and owns its
+shell, filesystem, approvals, and sandbox.
 
-## Prerequisites
+## 1. Prerequisites
 
-- a non-production Portkey organization and workspace;
-- the hosted Portkey AWS principal ARN shown for assumed-role integrations;
-- a unique external ID of at least 16 characters;
-- AWS credentials authorized to deploy an IAM role in `us-east-1`;
-- access to `openai.gpt-5.5` through Bedrock Mantle;
-- AWS CLI v2, Python 3, GNU Make, and Codex for the full test.
+- AWS CLI credentials for a non-production `us-east-1` account;
+- `eksctl`, `kubectl`, Helm 3, Python 3, and Codex CLI;
+- an existing EKS cluster with OIDC enabled, or permission to create the
+  optional two-node sandbox cluster;
+- AWS Load Balancer Controller for NLB IP targets;
+- Portkey Enterprise Docker username/password, immutable gateway image tag,
+  patch-pinned Redis image tag, pinned Helm chart version, client-auth license, organization ID,
+  and workspace API key.
 
-Use an isolated workspace and synthetic prompts. The strict continuation test
-sets `store=true` on its initial request. AWS documents that stored Mantle
-Responses are retained in the source region for 30 days and scoped to the
-calling Bedrock Project. The follow-up and all other probe requests set
-`store=false`.
-
-## 1. Configure the Local Deployment File
+Copy the ignored environment file:
 
 ```bash
-cp deployment/portkey/.env.deploy.example \
-  deployment/portkey/.env.deploy
+cp deployment/portkey/.env.deploy.example deployment/portkey/.env.deploy
 ```
 
-Initially set:
+Never commit that file. The helper validates credential presence without
+printing values and renders Helm secrets into a temporary mode-`0600` file.
 
-```dotenv
-AWS_REGION=us-east-1
-PORTKEY_AWS_PRINCIPAL_ARN=<principal supplied by Portkey>
-PORTKEY_EXTERNAL_ID=<unique external ID>
-BEDROCK_MANTLE_PROJECT_ID=*
+## 2. Create or select EKS
+
+For an existing cluster, set `PORTKEY_CLUSTER_NAME` and skip creation. For the
+included sandbox cluster:
+
+```bash
+make portkey-cluster-plan
+CONFIRM_AWS_WRITE=1 make portkey-cluster-deploy
 ```
 
-The real file is ignored by Git. The helper never prints the external ID or
-Portkey API key, and passes CloudFormation parameters through a mode-`0600`
-temporary file rather than command-line values.
+The template creates two `t4g.medium` managed nodes across the EKS-managed VPC.
+Production users should apply their existing private-cluster, egress,
+autoscaling, backup, and admission-control standards instead.
 
-## 2. Provision the AWS Role
+## 3. Deploy AWS resources
 
 ```bash
 make portkey-aws-check
 make portkey-aws-plan
-make portkey-aws-deploy
-make portkey-aws-status
+CONFIRM_AWS_WRITE=1 make portkey-aws-deploy
 ```
 
-The stack creates one IAM role with:
+CloudFormation creates:
 
-- a trust policy for the supplied Portkey principal;
-- mandatory `sts:ExternalId` equality;
-- `bedrock-mantle:CreateInference` restricted to
-  `openai.gpt-5.5` through the `bedrock-mantle:Model` condition;
-- response/project read operations on Mantle projects in `us-east-1` only.
+- an encrypted, versioned S3 log bucket with a 30-day lifecycle;
+- a scoped IAM managed policy; `eksctl` creates an IRSA role trusted only by
+  `portkeyai/gateway-sa` (or the configured names) and attaches that policy;
+- S3 permissions limited to that bucket;
+- Bedrock Mantle permissions limited to `us-east-1`, Mantle projects in this
+  account, and `openai.gpt-5.5`.
 
-The initial project scope is `project/*` because the hosted provider setup does
-not expose which Project Portkey will resolve before the first request. After
-the live run, record the `proj_...` identifier from CloudTrail, set
-`BEDROCK_MANTLE_PROJECT_ID`, and run `make portkey-aws-deploy` again.
+Start with `BEDROCK_MANTLE_PROJECT_ID=*`. After CloudTrail identifies the
+project, set the `proj_...` ID and deploy again to tighten the role.
 
-## 3. Create the Portkey Provider
+The S3 bucket has `DeletionPolicy: Retain`; cleanup reports it rather than
+silently deleting validation evidence.
 
-In the evaluation workspace:
+## 4. Install the gateway
 
-1. Open **Model Catalog** and add a provider.
-2. Select **Bedrock Mantle**, not **Bedrock**.
-3. Select **Assumed Role** authentication.
-4. Enter the stack's role ARN, the same external ID, and `us-east-1`.
-5. Limit provisioning to the evaluation workspace and record the provider slug.
-6. Create a workspace API key scoped to inference for that workspace.
+Install the AWS Load Balancer Controller using your organization's standard
+EKS add-on workflow. The supplied values use an internal NLB by default. Local
+validation can use `kubectl port-forward`, so making the gateway public is not
+required.
 
-Finish the ignored environment file:
-
-```dotenv
-PORTKEY_PROVIDER_SLUG=bedrock-mantle-validation
-PORTKEY_MODEL=@bedrock-mantle-validation/openai.gpt-5.5
-PORTKEY_API_KEY=<workspace key>
+```bash
+make portkey-helm-plan
+CONFIRM_AWS_WRITE=1 make portkey-helm-deploy
+make portkey-status
 ```
 
-The helper rejects any region, hosted URL, or upstream model other than this
-walkthrough's fixed target. It does not silently fall back to another model.
+`helm-plan` rejects mutable `latest` image tags. Use versions supplied and
+supported by Portkey. The chart deploys the Enterprise gateway, built-in Redis,
+Kubernetes secrets, service account, and NLB service.
 
-## 4. Validate the Contract and Codex
+## 5. Configure Bedrock Mantle
+
+In Portkey Model Catalog:
+
+1. Select **Bedrock Mantle**, not classic **Bedrock**.
+2. Select **Service Role (EKS / IRSA)** authentication.
+3. Set the AWS region to `us-east-1`; no AWS access key or assumed-role secret
+   is required because the pod receives the IRSA role.
+4. Save the provider and copy its slug without `@` into
+   `PORTKEY_PROVIDER_SLUG`.
+5. Set `PORTKEY_MODEL=@<slug>/openai.gpt-5.5`.
+
+Classic `bedrock` uses Converse/InvokeModel and does not provide the same
+stateful Responses continuation. The dedicated `bedrock-mantle` provider
+forwards Responses requests to the regional Mantle endpoint and supports EKS
+service-role authentication. See [Portkey's Mantle integration](https://portkey.ai/docs/integrations/llms/bedrock-mantle).
+
+## 6. Configure Codex
+
+For durable use, set `PORTKEY_BASE_URL` to the reachable AWS gateway endpoint,
+including `/v1`, then run:
 
 ```bash
 make portkey-check
 make portkey-codex-config
+```
+
+The generated configuration is equivalent to:
+
+```toml
+model_provider = "portkey"
+model = "@mantle-provider/openai.gpt-5.5"
+
+[model_providers.portkey]
+name = "Portkey Hybrid on AWS"
+base_url = "https://your-approved-gateway.example/v1"
+env_key = "PORTKEY_API_KEY"
+wire_api = "responses"
+```
+
+Terminate TLS using an approved ALB/NLB listener or internal reverse proxy
+before distributing a durable URL. Do not expose the example plaintext NLB to
+the public internet.
+
+## 7. End-to-end validation
+
+When `PORTKEY_BASE_URL` is blank, the validation targets automatically open a
+temporary local port-forward to the EKS service:
+
+```bash
 make portkey-auth-negative
 make portkey-validate
 make portkey-codex-validate
 ```
 
-`portkey-validate` requires:
+The strict contract requires the exact configured model with no fallback,
+Responses shape, reasoning output, stored `previous_response_id`
+continuation, completed SSE events, and a forced function call. The Codex test
+uses an isolated fixture repository and requires a file read, local tool use,
+sentinel-file write, and exact final answer.
 
-- `GET /v1/models` to expose the exact configured provider/model entry;
-- the exact `openai.gpt-5.5` upstream model;
-- Responses object shape and a reasoning output item;
-- semantic `previous_response_id` continuation;
-- multiple SSE events ending in `response.completed`;
-- a forced function-tool call with a call ID.
+AWS documents stored Mantle Responses as retained for 30 days when
+`store=true`. Treat continuation as an explicit data-retention choice; do not
+send data that policy forbids AWS or the configured S3/Portkey log stores from
+retaining. See [AWS Bedrock Mantle Responses](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html).
 
-`portkey-codex-validate` uses `--ignore-user-config`, `--ephemeral`, and a
-disposable directory. Codex must read a fixture through a local tool, create a
-sentinel file, and return the expected final message. It does not modify the
-developer's normal Codex configuration or repository.
+Also verify manually:
 
-## 5. Capture Promotion Evidence
+- the request is attributed to the evaluation key/workspace in Portkey logs;
+- CloudTrail Mantle data events record `CreateInference` for the IRSA role and
+  `openai.gpt-5.5`;
+- a revoked key and an exceeded Portkey budget/rate limit reject inference;
+- the IAM role rejects another model;
+- captured evidence contains no licenses, Docker credentials, API keys, tokens,
+  Kubernetes secrets, or generated Helm values.
 
-Keep redacted evidence outside Git under `deployment/portkey/.evidence/` until
-it is reviewed. Capture:
+If a check fails, keep redacted failure evidence and mark it unverified. Do not
+weaken the probe or silently change models.
 
-- output from the strict probe and isolated Codex run;
-- Portkey request IDs, workspace identity, provider slug, model, and policy;
-- a deliberately exceeded budget or rate policy returning a block;
-- API-key revocation time and a rejected request after revocation;
-- the assumed role and `bedrock-mantle.amazonaws.com` `CreateInference` event;
-- the resolved Mantle Project ARN and the tightened IAM stack status;
-- prompt, response, trace, and Portkey log-retention settings.
+## 8. Cleanup
 
-Mantle inference calls are CloudTrail **data events**, which are not enabled by
-default and may incur charges. Enable them explicitly on the evaluation trail
-or event data store, then filter for:
-
-```text
-eventSource = bedrock-mantle.amazonaws.com
-eventName   = CreateInference
-awsRegion   = us-east-1
-requestParameters.model = openai.gpt-5.5
-```
-
-Do not place API keys, external IDs, prompts, response bodies, or unredacted
-account identifiers in committed evidence.
-
-## Troubleshooting
-
-- **`previous_response_id` is ignored:** confirm the Model Catalog provider is
-  **Bedrock Mantle**. Classic Bedrock is an adapter and is the wrong route.
-- **Model validation fails:** confirm the exact Portkey model is
-  `@<provider-slug>/openai.gpt-5.5` and that the provider is in `us-east-1`.
-- **Access denied from AWS:** verify the Portkey principal, external ID, project
-  scope, and `bedrock-mantle:Model` condition. Do not add classic Bedrock
-  permissions as a workaround.
-- **No CloudTrail inference event:** Mantle inference is a data event; verify
-  the trail's advanced event selectors include `AWS::BedrockMantle::Project`.
-- **Codex works but identity is missing:** stop promotion and correct the
-  workspace key or JWT attribution before distributing configuration.
-
-## Cleanup
-
-First revoke the evaluation API key and remove the Portkey provider. Then:
+Revoke the evaluation key and remove the Model Catalog provider first. Then:
 
 ```bash
 make portkey-aws-cleanup-plan
-make portkey-aws-cleanup
+CONFIRM_STACK_DELETE=codex-portkey-hybrid make portkey-aws-cleanup
 ```
 
-Confirm the IAM role is gone and retain only approved, redacted evidence.
+If the included sandbox cluster was created solely for this evaluation:
 
-## References
+```bash
+CONFIRM_CLUSTER_DELETE=codex-portkey make portkey-cluster-cleanup
+```
 
-- [Portkey Codex integration](https://docs.portkey.ai/docs/integrations/libraries/codex)
-- [Portkey Open Responses](https://docs.portkey.ai/docs/product/ai-gateway/responses-api)
-- [Portkey Bedrock Mantle](https://portkey.ai/docs/integrations/llms/bedrock-mantle)
-- [AWS Responses API on Bedrock Mantle](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html)
-- [AWS Mantle IAM permissions](https://docs.aws.amazon.com/bedrock/latest/userguide/inference.html)
-- [AWS Mantle CloudTrail events](https://docs.aws.amazon.com/bedrock/latest/userguide/logging-cloudtrail-mantle.html)
-- [Enterprise Gateway Guidance](ENTERPRISE_GATEWAY_GUIDANCE.md)
+The S3 log bucket is retained. Empty and delete it only after confirming the
+evidence and retention requirements.
