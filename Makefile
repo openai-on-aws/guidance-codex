@@ -7,6 +7,8 @@ IDC_SCRIPT := deployment/scripts/idc-stack.sh
 	litellm-status litellm-provision-key litellm-codex-config litellm-validate \
 	litellm-cleanup-plan litellm-cleanup \
 	portkey-cluster-plan portkey-cluster-deploy portkey-cluster-cleanup \
+	portkey-lbc-plan portkey-lbc-deploy portkey-lbc-status \
+	portkey-lbc-cleanup-plan portkey-lbc-cleanup \
 	portkey-aws-check portkey-aws-plan portkey-aws-deploy portkey-helm-plan \
 	portkey-helm-deploy portkey-status \
 	portkey-aws-cleanup-plan portkey-aws-cleanup portkey-check \
@@ -26,6 +28,8 @@ help:
 		'' \
 		'Portkey Hybrid on Amazon EKS:' \
 		'  make portkey-cluster-plan portkey-cluster-deploy' \
+		'  make portkey-lbc-plan portkey-lbc-deploy portkey-lbc-status' \
+		'  make portkey-lbc-cleanup-plan portkey-lbc-cleanup' \
 		'  make portkey-aws-check portkey-aws-plan portkey-aws-deploy' \
 		'  make portkey-helm-plan portkey-helm-deploy portkey-status' \
 		'  make portkey-check portkey-codex-config portkey-validate portkey-codex-validate' \
@@ -73,6 +77,21 @@ portkey-cluster-deploy:
 
 portkey-cluster-cleanup:
 	@$(PORTKEY_SCRIPT) cluster-cleanup
+
+portkey-lbc-plan:
+	@$(PORTKEY_SCRIPT) lbc-plan
+
+portkey-lbc-deploy:
+	@$(PORTKEY_SCRIPT) lbc-deploy
+
+portkey-lbc-status:
+	@$(PORTKEY_SCRIPT) lbc-status
+
+portkey-lbc-cleanup-plan:
+	@$(PORTKEY_SCRIPT) lbc-cleanup-plan
+
+portkey-lbc-cleanup:
+	@$(PORTKEY_SCRIPT) lbc-cleanup
 
 portkey-aws-check:
 	@$(PORTKEY_SCRIPT) aws-check

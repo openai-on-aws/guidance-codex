@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -95,35 +96,46 @@ def require_listed_model(
     headers: dict[str, str],
     model: str,
     timeout: int,
+    attempts: int = 1,
+    delay_seconds: float = 0,
 ) -> None:
     provider = model.split("/", 1)[0].lstrip("@") if "/" in model else ""
     query = urllib.parse.urlencode({"provider": provider, "limit": 100})
-    request = urllib.request.Request(
-        f"{base_url.rstrip('/')}/models?{query}",
-        headers=headers,
-        method="GET",
+    for attempt in range(1, attempts + 1):
+        request = urllib.request.Request(
+            f"{base_url.rstrip('/')}/models?{query}",
+            headers=headers,
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                body = response.read()
+        except urllib.error.HTTPError as error:
+            error.read()
+            raise RuntimeError(
+                f"model catalog returned HTTP {error.code}"
+            ) from error
+        except urllib.error.URLError as error:
+            raise RuntimeError(
+                f"model catalog request failed: {error.reason}"
+            ) from error
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise RuntimeError("model catalog did not return JSON") from error
+        listed = {
+            item.get("id")
+            for item in payload.get("data", [])
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        }
+        if model in listed:
+            return
+        if attempt < attempts:
+            time.sleep(delay_seconds)
+    raise RuntimeError(
+        f"model catalog does not expose required model {model!r} "
+        f"after {attempts} attempt(s)"
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            body = response.read()
-    except urllib.error.HTTPError as error:
-        error.read()
-        raise RuntimeError(
-            f"model catalog returned HTTP {error.code}"
-        ) from error
-    except urllib.error.URLError as error:
-        raise RuntimeError(f"model catalog request failed: {error.reason}") from error
-    try:
-        payload = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise RuntimeError("model catalog did not return JSON") from error
-    listed = {
-        item.get("id")
-        for item in payload.get("data", [])
-        if isinstance(item, dict) and isinstance(item.get("id"), str)
-    }
-    if model not in listed:
-        raise RuntimeError(f"model catalog does not expose required model {model!r}")
 
 
 def parse_sse(body: bytes) -> list[tuple[str | None, dict]]:
@@ -312,9 +324,25 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Require GET /models to expose the exact configured model.",
     )
+    parser.add_argument(
+        "--model-list-attempts",
+        type=int,
+        default=1,
+        help="Number of exact-model discovery attempts (default: 1).",
+    )
+    parser.add_argument(
+        "--model-list-delay",
+        type=float,
+        default=10,
+        help="Seconds between model discovery attempts (default: 10).",
+    )
     args = parser.parse_args()
     if not args.base_url:
         parser.error("--base-url is required")
+    if args.model_list_attempts < 1:
+        parser.error("--model-list-attempts must be at least 1")
+    if args.model_list_delay < 0:
+        parser.error("--model-list-delay must be non-negative")
     try:
         extra_headers = parse_header_env(args.header_env, os.environ)
         args.headers = build_headers(
@@ -331,7 +359,14 @@ def main() -> int:
     if args.expected_model:
         validate_expected_model(args.model, args.expected_model)
     if args.require_model_listed:
-        require_listed_model(args.base_url, args.headers, args.model, args.timeout)
+        require_listed_model(
+            args.base_url,
+            args.headers,
+            args.model,
+            args.timeout,
+            args.model_list_attempts,
+            args.model_list_delay,
+        )
     continuation_value = "CODEX_GATEWAY_7F3A"
     first = send_response(
         args.base_url,

@@ -5,7 +5,7 @@ Parameters:
   MantleProjectId:
     Type: String
     Default: '*'
-    AllowedPattern: '^(\*|proj_[A-Za-z0-9_-]+)$'
+    AllowedPattern: '^(\*|default|proj_[A-Za-z0-9_-]+)$'
   MantleModelId:
     Type: String
     Default: openai.gpt-5.5

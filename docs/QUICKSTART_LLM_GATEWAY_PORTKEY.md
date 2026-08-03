@@ -16,7 +16,7 @@ requires licensed images and a client-auth license supplied by Portkey.
 
 ```text
 Codex
-  -> AWS NLB or kubectl port-forward /v1/responses
+  -> approved HTTPS endpoint or local kubectl port-forward /v1/responses
   -> Portkey Enterprise gateway on EKS
      -> local Redis cache
      -> S3 request/response log store
@@ -33,11 +33,12 @@ shell, filesystem, approvals, and sandbox.
 
 ## 1. Prerequisites
 
-- AWS CLI credentials for a non-production `us-east-1` account;
-- `eksctl`, `kubectl`, Helm 3, Python 3, and Codex CLI;
+- AWS CLI v1 or v2 credentials for a non-production `us-east-1` account;
+- `eksctl` 0.229.0 or newer, `kubectl`, Helm 3, Python 3, and Codex CLI;
 - an existing EKS cluster with OIDC enabled, or permission to create the
   optional two-node sandbox cluster;
-- AWS Load Balancer Controller for NLB IP targets;
+- permission to install the AWS Load Balancer Controller, or an existing ready
+  controller for NLB IP targets;
 - Portkey Enterprise Docker username/password, immutable gateway image tag,
   patch-pinned Redis image tag, pinned Helm chart version, client-auth license, organization ID,
   and workspace API key.
@@ -45,11 +46,13 @@ shell, filesystem, approvals, and sandbox.
 Copy the ignored environment file:
 
 ```bash
-cp deployment/portkey/.env.deploy.example deployment/portkey/.env.deploy
+install -m 600 deployment/portkey/.env.deploy.example deployment/portkey/.env.deploy
 ```
 
 Never commit that file. The helper validates credential presence without
-printing values and renders Helm secrets into a temporary mode-`0600` file.
+printing values, refuses a group/world-readable environment file, does not
+blanket-export deployment secrets, and renders Helm secrets into a temporary
+mode-`0600` file.
 
 ## 2. Create or select EKS
 
@@ -62,8 +65,38 @@ CONFIRM_AWS_WRITE=1 make portkey-cluster-deploy
 ```
 
 The template creates two `t4g.medium` managed nodes across the EKS-managed VPC.
+It also creates a controller-specific IRSA service account and installs the
+pinned AWS Load Balancer Controller Helm chart. The command does not proceed to
+Portkey until the controller deployment and `TargetGroupBinding` CRD are ready.
+The controller watches only the configured Portkey namespace, and its Service
+mutator webhook is disabled so it does not claim unrelated LoadBalancer
+Services. Listener tagging is explicitly enabled because the checked-in IAM
+policy uses the controller's exact cluster tag; ALB-only Shield and WAF
+integrations are disabled.
 Production users should apply their existing private-cluster, egress,
 autoscaling, backup, and admission-control standards instead.
+
+For an existing cluster, install or verify the controller explicitly:
+
+```bash
+make portkey-lbc-plan
+CONFIRM_AWS_WRITE=1 make portkey-lbc-deploy
+make portkey-lbc-status
+```
+
+If a ready standard controller deployment already exists, `lbc-deploy` leaves
+it in place only after verifying the pinned controller version, target cluster,
+and that it watches either all namespaces or the configured Portkey namespace.
+Otherwise it creates an IRSA role trusted only by the controller service account
+and installs the pinned chart. The reviewed policy in
+`deployment/portkey/lbc-iam-policy.json.tmpl` is NLB-only: regional API calls
+are fixed to `us-east-1`, mutable resources are account-scoped, security-group
+operations are limited to the EKS VPC, new load balancers must be internal,
+and controller resources require the exact cluster tag. Read-only EC2/ELB
+discovery and service-linked-role creation retain the minimum wildcard resource
+scope required by AWS. This controller policy is still broader than the
+Portkey gateway's model-scoped permissions. Its chart version is intentionally
+fixed because the IAM actions and listener-tag conditions are version-matched.
 
 ## 3. Deploy AWS resources
 
@@ -83,17 +116,19 @@ CloudFormation creates:
   account, and `openai.gpt-5.5`.
 
 Start with `BEDROCK_MANTLE_PROJECT_ID=*`. After CloudTrail identifies the
-project, set the `proj_...` ID and deploy again to tighten the role.
+project, set its `proj_...` ID—or `default` when Mantle used the account default
+project—and deploy again to tighten the role.
 
 The S3 bucket has `DeletionPolicy: Retain`; cleanup reports it rather than
 silently deleting validation evidence.
 
 ## 4. Install the gateway
 
-Install the AWS Load Balancer Controller using your organization's standard
-EKS add-on workflow. The supplied values use an internal NLB by default. Local
-validation can use `kubectl port-forward`, so making the gateway public is not
-required.
+The supplied values explicitly assign the Service to the AWS Load Balancer
+Controller and request an internal IP-target NLB. The helper requires
+`PORTKEY_INTERNAL_NLB=true`; it will not place Portkey API keys or prompts on a
+public plaintext listener. Local validation uses `kubectl port-forward` when a
+durable private TLS endpoint is not available.
 
 ```bash
 make portkey-helm-plan
@@ -104,6 +139,14 @@ make portkey-status
 `helm-plan` rejects mutable `latest` image tags. Use versions supplied and
 supported by Portkey. The chart deploys the Enterprise gateway, built-in Redis,
 Kubernetes secrets, service account, and NLB service.
+
+If upgrading a release created before this controller fix, do not patch the
+Service's load-balancer type or scheme in place. The helper stops when either
+annotation differs from `external` and `internal`. Delete only the Portkey
+gateway Service, wait for its old load balancer to be removed, and rerun
+`portkey-helm-deploy`; Helm recreates the Service with the supported
+annotations. AWS warns that changing these annotations in place can
+misconfigure or leak load balancers.
 
 ## 5. Configure Bedrock Mantle
 
@@ -124,8 +167,8 @@ service-role authentication. See [Portkey's Mantle integration](https://portkey.
 
 ## 6. Configure Codex
 
-For durable use, set `PORTKEY_BASE_URL` to the reachable AWS gateway endpoint,
-including `/v1`, then run:
+For durable use, place approved TLS termination in front of the internal NLB,
+then set `PORTKEY_BASE_URL` to that HTTPS endpoint, including `/v1`, and run:
 
 ```bash
 make portkey-check
@@ -143,7 +186,14 @@ name = "Portkey Hybrid on AWS"
 base_url = "https://your-approved-gateway.example/v1"
 env_key = "PORTKEY_API_KEY"
 wire_api = "responses"
+env_http_headers = { "x-portkey-api-key" = "PORTKEY_API_KEY" }
 ```
+
+Codex sends the key as both bearer authorization and `x-portkey-api-key`. The
+strict and negative-auth probes use the identical header contract, preventing a
+probe from passing with a request shape that Codex does not use. The isolated
+Codex validation also uses `shell_environment_policy.inherit="core"`, so local
+tool subprocesses do not inherit the Portkey key or deployment credentials.
 
 Terminate TLS using an approved ALB/NLB listener or internal reverse proxy
 before distributing a durable URL. Do not expose the example plaintext NLB to
@@ -160,7 +210,9 @@ make portkey-validate
 make portkey-codex-validate
 ```
 
-The strict contract requires the exact configured model with no fallback,
+`portkey-validate` allows up to one minute for Model Catalog synchronization.
+The strict contract then requires the exact configured
+`@<provider-slug>/openai.gpt-5.5` model with no fallback,
 Responses shape, reasoning output, stored `previous_response_id`
 continuation, completed SSE events, and a forced function call. The Codex test
 uses an isolated fixture repository and requires a file read, local tool use,
@@ -181,6 +233,15 @@ Also verify manually:
 - captured evidence contains no licenses, Docker credentials, API keys, tokens,
   Kubernetes secrets, or generated Helm values.
 
+The gateway pods require outbound HTTPS access to `api.portkey.ai`,
+`albus.portkey.ai`, and `bedrock-mantle.us-east-1.api.aws`. Restricted clusters
+must allow those destinations before validation. Full S3-backed log detail in
+Portkey's managed control plane also requires the documented control-plane to
+data-plane integration. With the default internal NLB, complete Portkey's
+vendor-assisted AWS PrivateLink onboarding and endpoint-service approval before
+claiming dashboard log evidence; basic inference and port-forward validation do
+not require that inbound connection.
+
 If a check fails, keep redacted failure evidence and mark it unverified. Do not
 weaken the probe or silently change models.
 
@@ -198,6 +259,24 @@ If the included sandbox cluster was created solely for this evaluation:
 ```bash
 CONFIRM_CLUSTER_DELETE=codex-portkey make portkey-cluster-cleanup
 ```
+
+Cluster deletion removes the controller installed with the sandbox. On a
+shared existing cluster, leave the AWS Load Balancer Controller in place unless
+the cluster owner confirms no other Service or Ingress depends on it.
+
+If this walkthrough installed the controller on an existing cluster and it is
+not shared, remove it only after the Portkey cleanup above has deleted its
+Service and load balancer:
+
+```bash
+make portkey-lbc-cleanup-plan
+CONFIRM_LBC_DELETE=codex-portkey make portkey-lbc-cleanup
+```
+
+The cleanup verifies Helm and service-account ownership, requires the controller
+to be scoped exactly to the Portkey namespace, and stops while any
+`TargetGroupBinding`, LoadBalancer Service, Ingress, or Gateway remains. A
+reused controller is never removed by this workflow.
 
 The S3 log bucket is retained. Empty and delete it only after confirming the
 evidence and retention requirements.

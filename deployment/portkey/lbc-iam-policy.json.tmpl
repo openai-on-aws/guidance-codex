@@ -1,0 +1,276 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CreateElasticLoadBalancingServiceLinkedRole",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": "elasticloadbalancing.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "ReadVpcStateInUsEast1",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeAccountAttributes",
+        "ec2:DescribeAvailabilityZones",
+        "ec2:DescribeInstances",
+        "ec2:DescribeInternetGateways",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeRouteTables",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeTags",
+        "ec2:DescribeVpcs",
+        "ec2:GetSecurityGroupsForVpc"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1"
+        }
+      }
+    },
+    {
+      "Sid": "ReadNetworkLoadBalancerStateInUsEast1",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:DescribeListenerAttributes",
+        "elasticloadbalancing:DescribeListeners",
+        "elasticloadbalancing:DescribeLoadBalancerAttributes",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeTags",
+        "elasticloadbalancing:DescribeTargetGroupAttributes",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:DescribeTargetHealth"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1"
+        }
+      }
+    },
+    {
+      "Sid": "UseOnlyTheClusterVpcWhenCreatingSecurityGroups",
+      "Effect": "Allow",
+      "Action": "ec2:CreateSecurityGroup",
+      "Resource": "arn:aws:ec2:us-east-1:__AWS_ACCOUNT_ID__:vpc/__VPC_ID__",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1"
+        }
+      }
+    },
+    {
+      "Sid": "CreateOnlyClusterTaggedSecurityGroupsInClusterVpc",
+      "Effect": "Allow",
+      "Action": "ec2:CreateSecurityGroup",
+      "Resource": "arn:aws:ec2:us-east-1:__AWS_ACCOUNT_ID__:security-group/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1",
+          "aws:RequestTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__"
+        },
+        "ArnEquals": {
+          "ec2:Vpc": "arn:aws:ec2:us-east-1:__AWS_ACCOUNT_ID__:vpc/__VPC_ID__"
+        }
+      }
+    },
+    {
+      "Sid": "TagControllerSecurityGroupsAtCreation",
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": "arn:aws:ec2:us-east-1:__AWS_ACCOUNT_ID__:security-group/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1",
+          "aws:RequestTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__",
+          "ec2:CreateAction": "CreateSecurityGroup"
+        }
+      }
+    },
+    {
+      "Sid": "MaintainControllerSecurityGroupTags",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ],
+      "Resource": "arn:aws:ec2:us-east-1:__AWS_ACCOUNT_ID__:security-group/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1",
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__"
+        }
+      }
+    },
+    {
+      "Sid": "MaintainBackendIngressRulesOnlyInClusterVpc",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupIngress"
+      ],
+      "Resource": "arn:aws:ec2:us-east-1:__AWS_ACCOUNT_ID__:security-group/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1"
+        },
+        "ArnEquals": {
+          "ec2:Vpc": "arn:aws:ec2:us-east-1:__AWS_ACCOUNT_ID__:vpc/__VPC_ID__"
+        }
+      }
+    },
+    {
+      "Sid": "DeleteControllerSecurityGroupsOnlyInClusterVpc",
+      "Effect": "Allow",
+      "Action": "ec2:DeleteSecurityGroup",
+      "Resource": "arn:aws:ec2:us-east-1:__AWS_ACCOUNT_ID__:security-group/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1",
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__"
+        },
+        "ArnEquals": {
+          "ec2:Vpc": "arn:aws:ec2:us-east-1:__AWS_ACCOUNT_ID__:vpc/__VPC_ID__"
+        }
+      }
+    },
+    {
+      "Sid": "CreateTaggedInternalNetworkLoadBalancers",
+      "Effect": "Allow",
+      "Action": "elasticloadbalancing:CreateLoadBalancer",
+      "Resource": "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:loadbalancer/net/*/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1",
+          "aws:RequestTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__",
+          "elasticloadbalancing:Scheme": "internal"
+        }
+      }
+    },
+    {
+      "Sid": "CreateTaggedTargetGroups",
+      "Effect": "Allow",
+      "Action": "elasticloadbalancing:CreateTargetGroup",
+      "Resource": "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:targetgroup/*/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1",
+          "aws:RequestTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__"
+        }
+      }
+    },
+    {
+      "Sid": "CreateTaggedTcpListenersOnControllerLoadBalancers",
+      "Effect": "Allow",
+      "Action": "elasticloadbalancing:CreateListener",
+      "Resource": "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:loadbalancer/net/*/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1",
+          "aws:RequestTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__",
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__",
+          "elasticloadbalancing:ListenerProtocol": "TCP"
+        }
+      }
+    },
+    {
+      "Sid": "TagNetworkLoadBalancerResourcesAtCreation",
+      "Effect": "Allow",
+      "Action": "elasticloadbalancing:AddTags",
+      "Resource": [
+        "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:listener/net/*/*/*",
+        "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:loadbalancer/net/*/*",
+        "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:targetgroup/*/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1",
+          "aws:RequestTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__",
+          "elasticloadbalancing:CreateAction": [
+            "CreateListener",
+            "CreateLoadBalancer",
+            "CreateTargetGroup"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "MaintainTagsOnControllerLoadBalancerResources",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:AddTags",
+        "elasticloadbalancing:RemoveTags"
+      ],
+      "Resource": [
+        "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:listener/net/*/*/*",
+        "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:loadbalancer/net/*/*",
+        "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:targetgroup/*/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1",
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__"
+        }
+      }
+    },
+    {
+      "Sid": "ManageControllerNetworkLoadBalancers",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:DeleteLoadBalancer",
+        "elasticloadbalancing:ModifyLoadBalancerAttributes",
+        "elasticloadbalancing:SetIpAddressType",
+        "elasticloadbalancing:SetSecurityGroups",
+        "elasticloadbalancing:SetSubnets"
+      ],
+      "Resource": "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:loadbalancer/net/*/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1",
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__"
+        }
+      }
+    },
+    {
+      "Sid": "ManageControllerNetworkLoadBalancerListeners",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:DeleteListener",
+        "elasticloadbalancing:ModifyListener",
+        "elasticloadbalancing:ModifyListenerAttributes"
+      ],
+      "Resource": "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:listener/net/*/*/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1",
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__"
+        }
+      }
+    },
+    {
+      "Sid": "ManageControllerTargetGroups",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:DeleteTargetGroup",
+        "elasticloadbalancing:DeregisterTargets",
+        "elasticloadbalancing:ModifyTargetGroup",
+        "elasticloadbalancing:ModifyTargetGroupAttributes",
+        "elasticloadbalancing:RegisterTargets"
+      ],
+      "Resource": "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:targetgroup/*/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1",
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__"
+        }
+      }
+    }
+  ]
+}

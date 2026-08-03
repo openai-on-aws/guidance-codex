@@ -43,8 +43,8 @@ service:
   port: 80
   containerPort: 8787
   annotations:
-    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
-    service.beta.kubernetes.io/aws-load-balancer-internal: __PORTKEY_INTERNAL_NLB__
+    service.beta.kubernetes.io/aws-load-balancer-type: "external"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: __PORTKEY_NLB_SCHEME__
     service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
     service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: "/v1/health"
     service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: "http"
