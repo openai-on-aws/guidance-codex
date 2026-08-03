@@ -4,7 +4,9 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
+import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
@@ -183,8 +185,10 @@ class TestPortkeyDeployment(unittest.TestCase):
             **os.environ,
             "PORTKEY_ENV_FILE": str(REPO_ROOT / "does-not-exist"),
             "AWS_REGION": "us-east-1",
+            "BEDROCK_MANTLE_REGION": "us-east-1",
             "PORTKEY_BASE_URL": "https://portkey.internal.example/v1",
             "PORTKEY_PROVIDER_SLUG": "bedrock-mantle-validation",
+            "PORTKEY_ALLOWED_MODELS": "openai.gpt-5.5",
             "PORTKEY_MODEL": "@bedrock-mantle-validation/openai.gpt-5.5",
             "PORTKEY_API_KEY": "do-not-print-this-secret",
         }
@@ -236,7 +240,7 @@ class TestPortkeyDeployment(unittest.TestCase):
         self.assertIn('shell_environment_policy.inherit="core"', script)
         self.assertNotIn("set -a", script)
 
-    def test_portkey_check_rejects_model_fallback(self):
+    def test_portkey_check_rejects_selected_model_outside_allowlist(self):
         environ = self.portkey_environment()
         environ["PORTKEY_MODEL"] = "@bedrock-mantle-validation/openai.gpt-5.4"
         result = subprocess.run(
@@ -248,8 +252,420 @@ class TestPortkeyDeployment(unittest.TestCase):
             check=False,
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("openai.gpt-5.5", result.stderr)
+        self.assertIn("PORTKEY_ALLOWED_MODELS", result.stderr)
         self.assertNotIn("do-not-print-this-secret", result.stdout + result.stderr)
+
+    def test_portkey_check_accepts_configurable_independent_regions_and_model(self):
+        environ = self.portkey_environment()
+        environ.update(
+            {
+                "AWS_REGION": "us-west-2",
+                "BEDROCK_MANTLE_REGION": "us-east-2",
+                "PORTKEY_ALLOWED_MODELS": (
+                    "openai.gpt-5.5,openai.gpt-5.4"
+                ),
+                "PORTKEY_MODEL": (
+                    "@bedrock-mantle-validation/openai.gpt-5.4"
+                ),
+            }
+        )
+        result = subprocess.run(
+            ["bash", str(SCRIPTS_DIR / "portkey-stack.sh"), "check"],
+            cwd=REPO_ROOT,
+            env=environ,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("do-not-print-this-secret", result.stdout + result.stderr)
+
+    def test_portkey_check_rejects_malformed_regions(self):
+        for variable, value in (
+            ("AWS_REGION", "us_east_1"),
+            ("BEDROCK_MANTLE_REGION", "*"),
+        ):
+            with self.subTest(variable=variable):
+                environ = self.portkey_environment()
+                environ[variable] = value
+                result = subprocess.run(
+                    ["bash", str(SCRIPTS_DIR / "portkey-stack.sh"), "check"],
+                    cwd=REPO_ROOT,
+                    env=environ,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(variable, result.stderr)
+                self.assertNotIn(
+                    "do-not-print-this-secret",
+                    result.stdout + result.stderr,
+                )
+
+    def test_portkey_check_rejects_regions_in_different_partitions(self):
+        environ = self.portkey_environment()
+        environ.update(
+            {
+                "AWS_REGION": "us-west-2",
+                "BEDROCK_MANTLE_REGION": "us-gov-west-1",
+            }
+        )
+        result = subprocess.run(
+            ["bash", str(SCRIPTS_DIR / "portkey-stack.sh"), "check"],
+            cwd=REPO_ROOT,
+            env=environ,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("same AWS partition", result.stderr)
+        self.assertNotIn("do-not-print-this-secret", result.stdout + result.stderr)
+
+    def test_portkey_check_rejects_unsupported_mantle_region(self):
+        environ = self.portkey_environment()
+        environ["BEDROCK_MANTLE_REGION"] = "cn-north-1"
+        result = subprocess.run(
+            ["bash", str(SCRIPTS_DIR / "portkey-stack.sh"), "check"],
+            cwd=REPO_ROOT,
+            env=environ,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("AWS-documented Bedrock Mantle region", result.stderr)
+        self.assertNotIn("do-not-print-this-secret", result.stdout + result.stderr)
+
+    def test_portkey_check_rejects_explicitly_empty_model_allowlist(self):
+        environ = self.portkey_environment()
+        environ["PORTKEY_ALLOWED_MODELS"] = ""
+        result = subprocess.run(
+            ["bash", str(SCRIPTS_DIR / "portkey-stack.sh"), "check"],
+            cwd=REPO_ROOT,
+            env=environ,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("PORTKEY_ALLOWED_MODELS", result.stderr)
+        self.assertNotIn("do-not-print-this-secret", result.stdout + result.stderr)
+
+    def test_portkey_check_rejects_model_allowlist_over_cloudformation_limit(self):
+        models = [f"model{i:02d}.{'a' * 244}" for i in range(17)]
+        oversized_allowlist = ",".join(models)
+        self.assertGreater(len(oversized_allowlist), 4096)
+        self.assertTrue(all(len(model) <= 256 for model in models))
+
+        environ = self.portkey_environment()
+        environ["PORTKEY_ALLOWED_MODELS"] = oversized_allowlist
+        result = subprocess.run(
+            ["bash", str(SCRIPTS_DIR / "portkey-stack.sh"), "check"],
+            cwd=REPO_ROOT,
+            env=environ,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("4096", result.stderr)
+        self.assertNotIn("do-not-print-this-secret", result.stdout + result.stderr)
+
+    def test_portkey_check_rejects_project_id_over_cloudformation_limit(self):
+        oversized_project_id = "proj_" + ("a" * 252)
+        self.assertGreater(len(oversized_project_id), 256)
+
+        environ = self.portkey_environment()
+        environ["BEDROCK_MANTLE_PROJECT_ID"] = oversized_project_id
+        result = subprocess.run(
+            ["bash", str(SCRIPTS_DIR / "portkey-stack.sh"), "check"],
+            cwd=REPO_ROOT,
+            env=environ,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("256", result.stderr)
+        self.assertNotIn("do-not-print-this-secret", result.stdout + result.stderr)
+
+    def test_portkey_check_rejects_unsafe_or_malformed_model_allowlists(self):
+        rejected_allowlists = {
+            "wildcard": "*",
+            "duplicate": "openai.gpt-5.5,openai.gpt-5.5",
+            "empty entry": "openai.gpt-5.5,",
+            "provider-qualified entry": (
+                "openai.gpt-5.5,@bedrock-mantle-validation/openai.gpt-5.4"
+            ),
+            "malformed entry": "openai.gpt-5.5,bad$model",
+        }
+        for description, allowed_models in rejected_allowlists.items():
+            with self.subTest(description=description):
+                environ = self.portkey_environment()
+                environ["PORTKEY_ALLOWED_MODELS"] = allowed_models
+                result = subprocess.run(
+                    ["bash", str(SCRIPTS_DIR / "portkey-stack.sh"), "check"],
+                    cwd=REPO_ROOT,
+                    env=environ,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("PORTKEY_ALLOWED_MODELS", result.stderr)
+                self.assertNotIn(
+                    "do-not-print-this-secret",
+                    result.stdout + result.stderr,
+                )
+
+    def test_portkey_cluster_plan_renders_configured_aws_region(self):
+        script = SCRIPTS_DIR / "portkey-stack.sh"
+        with TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            fake_bin = temp / "bin"
+            fake_bin.mkdir()
+            rendered_cluster = temp / "rendered-cluster.yaml"
+
+            eksctl = fake_bin / "eksctl"
+            eksctl.write_text(
+                """#!/usr/bin/env bash
+if [[ "${1:-}" == version ]]; then printf '%s\n' '0.229.0'; exit 0; fi
+previous=''
+for argument in "$@"; do
+  if [[ "$previous" == '--config-file' ]]; then
+    cp "$argument" "$PORTKEY_TEST_RENDERED_CLUSTER"
+  fi
+  previous="$argument"
+done
+exit 0
+""",
+                encoding="utf-8",
+            )
+            eksctl.chmod(0o700)
+
+            environ = self.portkey_environment()
+            environ.update(
+                {
+                    "AWS_REGION": "us-west-2",
+                    "BEDROCK_MANTLE_REGION": "us-east-2",
+                    "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+                    "PORTKEY_TEST_RENDERED_CLUSTER": str(rendered_cluster),
+                }
+            )
+            result = subprocess.run(
+                ["bash", str(script), "cluster-plan"],
+                cwd=REPO_ROOT,
+                env=environ,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            rendered = rendered_cluster.read_text(encoding="utf-8")
+            self.assertIn("region: us-west-2", rendered)
+            self.assertNotIn("region: us-east-1", rendered)
+
+    def test_portkey_deploy_propagates_regions_and_model_allowlist(self):
+        script = SCRIPTS_DIR / "portkey-stack.sh"
+        with TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            fake_bin = temp / "bin"
+            fake_bin.mkdir()
+            command_log = temp / "commands.log"
+
+            aws = fake_bin / "aws"
+            aws.write_text(
+                """#!/usr/bin/env bash
+printf 'aws %s\n' "$*" >>"$PORTKEY_TEST_COMMAND_LOG"
+case "$*" in
+  *"sts get-caller-identity"*) printf '%s\n' '{}' ;;
+  *"cluster.identity.oidc.issuer"*) printf '%s\n' 'https://oidc.eks.us-west-2.amazonaws.com/id/EXAMPLE' ;;
+  *"GatewayManagedPolicyArn"*) printf '%s\n' 'arn:aws:iam::123456789012:policy/portkey' ;;
+esac
+exit 0
+""",
+                encoding="utf-8",
+            )
+            aws.chmod(0o700)
+
+            eksctl = fake_bin / "eksctl"
+            eksctl.write_text(
+                """#!/usr/bin/env bash
+if [[ "${1:-}" == version ]]; then printf '%s\n' '0.229.0'; exit 0; fi
+printf 'eksctl %s\n' "$*" >>"$PORTKEY_TEST_COMMAND_LOG"
+exit 0
+""",
+                encoding="utf-8",
+            )
+            eksctl.chmod(0o700)
+
+            kubectl = fake_bin / "kubectl"
+            kubectl.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            kubectl.chmod(0o700)
+
+            environ = self.portkey_environment()
+            environ.update(
+                {
+                    "AWS_REGION": "us-west-2",
+                    "BEDROCK_MANTLE_REGION": "us-east-2",
+                    "PORTKEY_ALLOWED_MODELS": (
+                        "openai.gpt-5.5,openai.gpt-5.4"
+                    ),
+                    "CONFIRM_AWS_WRITE": "1",
+                    "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+                    "PORTKEY_TEST_COMMAND_LOG": str(command_log),
+                }
+            )
+            result = subprocess.run(
+                ["bash", str(script), "deploy"],
+                cwd=REPO_ROOT,
+                env=environ,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            commands = command_log.read_text(encoding="utf-8")
+            self.assertIn("--region us-west-2 cloudformation deploy", commands)
+            self.assertIn("BedrockMantleRegion=us-east-2", commands)
+            self.assertIn(
+                "MantleModelIds=openai.gpt-5.5,openai.gpt-5.4",
+                commands,
+            )
+            self.assertIn(
+                "eksctl utils associate-iam-oidc-provider "
+                "--cluster codex-portkey --region us-west-2",
+                commands,
+            )
+
+    def test_portkey_strict_validation_probes_every_allowed_model(self):
+        script = SCRIPTS_DIR / "portkey-stack.sh"
+        with TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            fake_bin = temp / "bin"
+            fake_bin.mkdir()
+            probe_log = temp / "probes.log"
+            real_python = shutil.which("python3") or sys.executable
+
+            python = fake_bin / "python3"
+            python.write_text(
+                """#!/usr/bin/env bash
+if [[ "${1:-}" == *validate-responses-contract.py ]]; then
+  printf '%s|%s\n' "$GATEWAY_MODEL" "$*" >>"$PORTKEY_TEST_PROBE_LOG"
+  exit 0
+fi
+exec "$PORTKEY_TEST_REAL_PYTHON" "$@"
+""",
+                encoding="utf-8",
+            )
+            python.chmod(0o700)
+
+            environ = self.portkey_environment()
+            environ.update(
+                {
+                    "AWS_REGION": "us-west-2",
+                    "BEDROCK_MANTLE_REGION": "us-east-2",
+                    "PORTKEY_ALLOWED_MODELS": (
+                        "openai.gpt-5.5,openai.gpt-5.4"
+                    ),
+                    "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+                    "PORTKEY_TEST_PROBE_LOG": str(probe_log),
+                    "PORTKEY_TEST_REAL_PYTHON": real_python,
+                }
+            )
+            result = subprocess.run(
+                ["bash", str(script), "validate"],
+                cwd=REPO_ROOT,
+                env=environ,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            probes = probe_log.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(probes), 2, probes)
+            expected = [
+                (
+                    "@bedrock-mantle-validation/openai.gpt-5.5",
+                    "openai.gpt-5.5",
+                ),
+                (
+                    "@bedrock-mantle-validation/openai.gpt-5.4",
+                    "openai.gpt-5.4",
+                ),
+            ]
+            for line, (qualified_model, upstream_model) in zip(probes, expected):
+                model, arguments = line.split("|", 1)
+                self.assertEqual(model, qualified_model)
+                self.assertIn(f"--expected-model {upstream_model}", arguments)
+                self.assertIn("--require-model-listed", arguments)
+                self.assertIn("--require-reasoning", arguments)
+                self.assertIn("--include-tool-call", arguments)
+
+    def test_portkey_strict_validation_fails_when_second_model_probe_fails(self):
+        script = SCRIPTS_DIR / "portkey-stack.sh"
+        with TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            fake_bin = temp / "bin"
+            fake_bin.mkdir()
+            probe_log = temp / "probes.log"
+            real_python = shutil.which("python3") or sys.executable
+
+            python = fake_bin / "python3"
+            python.write_text(
+                """#!/usr/bin/env bash
+if [[ "${1:-}" == *validate-responses-contract.py ]]; then
+  printf '%s\n' "$GATEWAY_MODEL" >>"$PORTKEY_TEST_PROBE_LOG"
+  if [[ "$GATEWAY_MODEL" == *@*/openai.gpt-5.4 ]]; then
+    printf '%s\n' 'forced second-model contract failure' >&2
+    exit 23
+  fi
+  exit 0
+fi
+exec "$PORTKEY_TEST_REAL_PYTHON" "$@"
+""",
+                encoding="utf-8",
+            )
+            python.chmod(0o700)
+
+            environ = self.portkey_environment()
+            environ.update(
+                {
+                    "PORTKEY_ALLOWED_MODELS": (
+                        "openai.gpt-5.5,openai.gpt-5.4"
+                    ),
+                    "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+                    "PORTKEY_TEST_PROBE_LOG": str(probe_log),
+                    "PORTKEY_TEST_REAL_PYTHON": real_python,
+                }
+            )
+            result = subprocess.run(
+                ["bash", str(script), "validate"],
+                cwd=REPO_ROOT,
+                env=environ,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 23)
+            self.assertEqual(
+                probe_log.read_text(encoding="utf-8").splitlines(),
+                [
+                    "@bedrock-mantle-validation/openai.gpt-5.5",
+                    "@bedrock-mantle-validation/openai.gpt-5.4",
+                ],
+            )
+            self.assertIn("forced second-model contract failure", result.stderr)
+            self.assertNotRegex(
+                result.stdout.lower(),
+                r"(all allowed models|strict validation (passed|succeeded|complete))",
+            )
 
     def test_portkey_irsa_role_scopes_service_account_and_mantle(self):
         template = (
@@ -258,9 +674,49 @@ class TestPortkeyDeployment(unittest.TestCase):
         self.assertIn("AWS::IAM::ManagedPolicy", template)
         script = (SCRIPTS_DIR / "portkey-stack.sh").read_text(encoding="utf-8")
         self.assertIn("eksctl create iamserviceaccount", script)
-        self.assertIn("bedrock-mantle:Model: !Ref MantleModelId", template)
+        self.assertIn("BedrockMantleRegion:", template)
+        self.assertIn("MantleModelIds:", template)
+        self.assertRegex(
+            template,
+            r"(?ms)MantleProjectId:.*?MaxLength: 256",
+        )
+        self.assertRegex(
+            template,
+            r"(?ms)MantleModelIds:\s+Type: String",
+        )
+        self.assertIn(
+            "bedrock-mantle:Model: !Split [',', !Ref MantleModelIds]",
+            template,
+        )
+        self.assertIn("${BedrockMantleRegion}", template)
+        self.assertNotIn("bedrock-mantle:${AWS::Region}", template)
         self.assertIn("bedrock-mantle:CreateInference", template)
         self.assertNotIn("bedrock:InvokeModel", template)
+        self.assertNotIn("AllowedValues: [openai.gpt-5.5]", template)
+
+    def test_portkey_supported_mantle_regions_match_cloudformation(self):
+        script = (SCRIPTS_DIR / "portkey-stack.sh").read_text(encoding="utf-8")
+        template = (
+            REPO_ROOT / "deployment" / "portkey" / "hybrid-infrastructure.yaml"
+        ).read_text(encoding="utf-8")
+        script_match = re.search(
+            r"(?ms)^SUPPORTED_BEDROCK_MANTLE_REGIONS=\(\n(.*?)^\)",
+            script,
+        )
+        template_match = re.search(
+            r"(?ms)^  BedrockMantleRegion:\n.*?^    AllowedValues:\n"
+            r"(.*?)^    ConstraintDescription:",
+            template,
+        )
+        self.assertIsNotNone(script_match)
+        self.assertIsNotNone(template_match)
+        script_regions = set(script_match.group(1).split())
+        template_regions = set(
+            re.findall(r"(?m)^      - ([a-z0-9-]+)$", template_match.group(1))
+        )
+        self.assertEqual(script_regions, template_regions)
+        self.assertIn("us-east-1", script_regions)
+        self.assertNotIn("cn-north-1", script_regions)
 
     def test_portkey_hybrid_values_do_not_contain_committed_secrets(self):
         values = (
@@ -370,7 +826,11 @@ class TestPortkeyDeployment(unittest.TestCase):
         # JSON parameters file is not a portable --parameter-overrides value.
         self.assertNotIn('--parameter-overrides "file://$parameters"', deploy)
         self.assertIn('MantleProjectId="$BEDROCK_MANTLE_PROJECT_ID"', deploy)
-        self.assertIn('MantleModelId="$MANTLE_MODEL_ID"', deploy)
+        self.assertIn(
+            'BedrockMantleRegion="$BEDROCK_MANTLE_REGION"',
+            deploy,
+        )
+        self.assertIn('MantleModelIds="$PORTKEY_ALLOWED_MODELS"', deploy)
 
     def test_portkey_nlb_is_owned_by_aws_load_balancer_controller(self):
         values = (
@@ -463,7 +923,8 @@ class TestPortkeyDeployment(unittest.TestCase):
         self.assertIn("__AWS_ACCOUNT_ID__", serialized)
         self.assertIn("__VPC_ID__", serialized)
         self.assertIn("__CLUSTER_NAME__", serialized)
-        self.assertIn('"aws:RequestedRegion": "us-east-1"', serialized)
+        self.assertIn("__AWS_REGION__", serialized)
+        self.assertNotIn("us-east-1", serialized)
         self.assertIn("ec2:Vpc", serialized)
         self.assertIn('"elasticloadbalancing:Scheme": "internal"', serialized)
         self.assertNotIn("wafv2:", serialized)
@@ -473,10 +934,88 @@ class TestPortkeyDeployment(unittest.TestCase):
 
         script = (SCRIPTS_DIR / "portkey-stack.sh").read_text(encoding="utf-8")
         self.assertIn("render_load_balancer_controller_service_account()", script)
+        self.assertIn('"__AWS_REGION__": os.environ["AWS_REGION"]', script)
         self.assertIn('"attachPolicy": policy', script)
         self.assertIn("found_placeholders != set(replacements)", script)
         self.assertNotIn('if "__" in policy_text', script)
         self.assertNotIn("wellKnownPolicies", script)
+
+    def test_portkey_lbc_plan_renders_alternate_region_and_partition(self):
+        script = SCRIPTS_DIR / "portkey-stack.sh"
+        with TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            fake_bin = temp / "bin"
+            fake_bin.mkdir()
+            rendered_lbc = temp / "rendered-lbc.json"
+            real_python = shutil.which("python3") or sys.executable
+
+            python = fake_bin / "python3"
+            python.write_text(
+                """#!/usr/bin/env bash
+if [[ "${1:-}" == '-m' && "${2:-}" == 'json.tool' ]]; then
+  cp "$3" "$PORTKEY_TEST_RENDERED_LBC"
+fi
+exec "$PORTKEY_TEST_REAL_PYTHON" "$@"
+""",
+                encoding="utf-8",
+            )
+            python.chmod(0o700)
+
+            helm = fake_bin / "helm"
+            helm.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            helm.chmod(0o700)
+
+            environ = self.portkey_environment()
+            environ.update(
+                {
+                    "AWS_REGION": "us-gov-west-1",
+                    "BEDROCK_MANTLE_REGION": "us-gov-west-1",
+                    "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+                    "PORTKEY_TEST_REAL_PYTHON": real_python,
+                    "PORTKEY_TEST_RENDERED_LBC": str(rendered_lbc),
+                }
+            )
+            result = subprocess.run(
+                ["bash", str(script), "lbc-plan"],
+                cwd=REPO_ROOT,
+                env=environ,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            rendered = json.loads(rendered_lbc.read_text(encoding="utf-8"))
+            self.assertEqual(rendered["metadata"]["region"], "us-gov-west-1")
+            policy = rendered["iam"]["serviceAccounts"][0]["attachPolicy"]
+            serialized = json.dumps(policy)
+            self.assertNotIn("__", serialized)
+            self.assertNotIn("us-east-1", serialized)
+
+            requested_regions = []
+            resource_arns = []
+            for statement in policy["Statement"]:
+                conditions = statement.get("Condition", {})
+                region = conditions.get("StringEquals", {}).get(
+                    "aws:RequestedRegion"
+                )
+                if region:
+                    requested_regions.append(region)
+                resources = statement.get("Resource", [])
+                if isinstance(resources, str):
+                    resources = [resources]
+                resource_arns.extend(
+                    resource
+                    for resource in resources
+                    if resource.startswith("arn:")
+                )
+
+            self.assertTrue(requested_regions)
+            self.assertEqual(set(requested_regions), {"us-gov-west-1"})
+            self.assertTrue(resource_arns)
+            for arn in resource_arns:
+                self.assertTrue(arn.startswith("arn:aws-us-gov:"), arn)
+                self.assertIn(":us-gov-west-1:", arn)
 
     def test_portkey_reuses_only_a_compatible_controller_watch_scope(self):
         script = SCRIPTS_DIR / "portkey-stack.sh"
@@ -968,6 +1507,7 @@ exit 0
             fake_bin.mkdir()
             values_path_marker = temp / "values-path"
             values_mode_marker = temp / "values-mode"
+            rendered_values_marker = temp / "rendered-values.yaml"
 
             aws = fake_bin / "aws"
             aws.write_text(
@@ -1005,6 +1545,7 @@ for argument in "$@"; do
     printf '%s' "$argument" >"$PORTKEY_TEST_VALUES_PATH"
     python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' \
       "$argument" >"$PORTKEY_TEST_VALUES_MODE"
+    cp "$argument" "$PORTKEY_TEST_RENDERED_VALUES"
   fi
   previous="$argument"
 done
@@ -1017,6 +1558,8 @@ exit 0
             environ = {
                 **os.environ,
                 **secrets,
+                "AWS_REGION": "us-west-2",
+                "BEDROCK_MANTLE_REGION": "us-east-2",
                 "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
                 "PORTKEY_ENV_FILE": str(temp / "does-not-exist"),
                 "PORTKEY_HELM_CHART_VERSION": "1.7.7",
@@ -1024,6 +1567,7 @@ exit 0
                 "PORTKEY_REDIS_IMAGE_TAG": "7.2.10-alpine",
                 "PORTKEY_TEST_VALUES_PATH": str(values_path_marker),
                 "PORTKEY_TEST_VALUES_MODE": str(values_mode_marker),
+                "PORTKEY_TEST_RENDERED_VALUES": str(rendered_values_marker),
             }
             result = subprocess.run(
                 ["bash", str(script), "helm-plan"],
@@ -1041,6 +1585,9 @@ exit 0
             self.assertEqual(values_mode_marker.read_text().strip(), "0o600")
             rendered_values = Path(values_path_marker.read_text())
             self.assertFalse(rendered_values.exists())
+            captured_values = rendered_values_marker.read_text(encoding="utf-8")
+            self.assertIn('LOG_STORE_REGION: "us-west-2"', captured_values)
+            self.assertNotIn("__PORTKEY_", captured_values)
 
 
 class TestLiteLLMPreflight(unittest.TestCase):

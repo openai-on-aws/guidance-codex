@@ -5,11 +5,34 @@ Parameters:
   MantleProjectId:
     Type: String
     Default: '*'
+    MaxLength: 256
     AllowedPattern: '^(\*|default|proj_[A-Za-z0-9_-]+)$'
-  MantleModelId:
+  BedrockMantleRegion:
+    Type: String
+    Default: us-east-1
+    MaxLength: 32
+    AllowedValues:
+      - ap-northeast-1
+      - ap-south-1
+      - ap-southeast-2
+      - ap-southeast-3
+      - eu-central-1
+      - eu-north-1
+      - eu-south-1
+      - eu-west-1
+      - eu-west-2
+      - sa-east-1
+      - us-east-1
+      - us-east-2
+      - us-gov-west-1
+      - us-west-2
+    ConstraintDescription: Must be an AWS-documented Bedrock Mantle region.
+  MantleModelIds:
     Type: String
     Default: openai.gpt-5.5
-    AllowedValues: [openai.gpt-5.5]
+    MaxLength: 4096
+    AllowedPattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}(,[A-Za-z0-9][A-Za-z0-9._:-]{0,255}){0,19}$'
+    ConstraintDescription: Must contain one to twenty comma-separated model IDs without wildcards or spaces.
 
 Resources:
   GatewayLogBucket:
@@ -55,10 +78,11 @@ Resources:
           - Sid: InvokeApprovedModel
             Effect: Allow
             Action: [bedrock-mantle:CreateInference]
-            Resource: !Sub 'arn:${AWS::Partition}:bedrock-mantle:${AWS::Region}:${AWS::AccountId}:project/${MantleProjectId}'
+            Resource: !Sub 'arn:${AWS::Partition}:bedrock-mantle:${BedrockMantleRegion}:${AWS::AccountId}:project/${MantleProjectId}'
             Condition:
               StringEquals:
-                bedrock-mantle:Model: !Ref MantleModelId
+                aws:RequestedRegion: !Ref BedrockMantleRegion
+                bedrock-mantle:Model: !Split [',', !Ref MantleModelIds]
           - Sid: ReadApprovedProjectResponses
             Effect: Allow
             Action:
@@ -66,14 +90,19 @@ Resources:
               - bedrock-mantle:CancelInference
               - bedrock-mantle:GetProject
               - bedrock-mantle:ListModels
-            Resource: !Sub 'arn:${AWS::Partition}:bedrock-mantle:${AWS::Region}:${AWS::AccountId}:project/${MantleProjectId}'
+            Resource: !Sub 'arn:${AWS::Partition}:bedrock-mantle:${BedrockMantleRegion}:${AWS::AccountId}:project/${MantleProjectId}'
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref BedrockMantleRegion
 
 Outputs:
   GatewayManagedPolicyArn:
     Value: !Ref GatewayManagedPolicy
   GatewayLogBucketName:
     Value: !Ref GatewayLogBucket
-  MantleModelId:
-    Value: !Ref MantleModelId
+  BedrockMantleRegion:
+    Value: !Ref BedrockMantleRegion
+  MantleModelIds:
+    Value: !Ref MantleModelIds
   RetainedResources:
     Value: !Sub 'S3 log bucket ${GatewayLogBucket} is retained when the stack is deleted.'

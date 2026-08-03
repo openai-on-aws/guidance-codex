@@ -27,6 +27,7 @@ PY
 fi
 
 AWS_REGION="${AWS_REGION:-us-east-1}"
+BEDROCK_MANTLE_REGION="${BEDROCK_MANTLE_REGION:-$AWS_REGION}"
 PORTKEY_CLUSTER_NAME="${PORTKEY_CLUSTER_NAME:-codex-portkey}"
 PORTKEY_NAMESPACE="${PORTKEY_NAMESPACE:-portkeyai}"
 PORTKEY_SERVICE_ACCOUNT="${PORTKEY_SERVICE_ACCOUNT:-gateway-sa}"
@@ -41,10 +42,16 @@ AWS_LBC_HELM_RELEASE=aws-load-balancer-controller
 AWS_LBC_NAMESPACE=kube-system
 AWS_LBC_SERVICE_ACCOUNT=aws-load-balancer-controller
 EKSCTL_MIN_VERSION=0.229.0
+SUPPORTED_BEDROCK_MANTLE_REGIONS=(
+  ap-northeast-1 ap-south-1 ap-southeast-2 ap-southeast-3
+  eu-central-1 eu-north-1 eu-south-1 eu-west-1 eu-west-2
+  sa-east-1 us-east-1 us-east-2 us-gov-west-1 us-west-2
+)
 PORTKEY_BASE_URL="${PORTKEY_BASE_URL:-}"
 PORTKEY_PROVIDER_SLUG="${PORTKEY_PROVIDER_SLUG:-}"
 PORTKEY_MODEL="${PORTKEY_MODEL:-}"
-MANTLE_MODEL_ID=openai.gpt-5.5
+PORTKEY_ALLOWED_MODELS="${PORTKEY_ALLOWED_MODELS-openai.gpt-5.5}"
+PORTKEY_ALLOWED_MODEL_IDS=()
 BEDROCK_MANTLE_PROJECT_ID="${BEDROCK_MANTLE_PROJECT_ID:-*}"
 export AWS_REGION
 [[ -z "${AWS_PROFILE:-}" ]] || export AWS_PROFILE
@@ -60,6 +67,57 @@ require_command() { command -v "$1" >/dev/null || die "$1 is required"; }
 require_value() { local name="$1"; [[ -n "${!name:-}" ]] || die "set $name in $ENV_FILE or the environment"; }
 aws_cli() { aws "${AWS_ARGS[@]}" "$@"; }
 confirm_write() { [[ "${CONFIRM_AWS_WRITE:-}" == 1 ]] || die 'set CONFIRM_AWS_WRITE=1 for AWS or Kubernetes mutations'; }
+aws_partition_for_region() {
+  case "$1" in
+    cn-*) printf 'aws-cn\n' ;;
+    us-gov-*) printf 'aws-us-gov\n' ;;
+    us-iso-*) printf 'aws-iso\n' ;;
+    us-isob-*) printf 'aws-iso-b\n' ;;
+    eu-isoe-*) printf 'aws-iso-e\n' ;;
+    us-isof-*) printf 'aws-iso-f\n' ;;
+    *) printf 'aws\n' ;;
+  esac
+}
+validate_region_name() {
+  local name="$1" value="$2"
+  [[ ${#value} -le 32 && "$value" =~ ^[a-z]{2}(-[a-z0-9]+)+-[0-9]+$ ]] || \
+    die "$name must be a valid AWS Region identifier"
+}
+bedrock_mantle_region_is_supported() {
+  local candidate="$1" region
+  for region in "${SUPPORTED_BEDROCK_MANTLE_REGIONS[@]}"; do
+    [[ "$candidate" != "$region" ]] || return 0
+  done
+  return 1
+}
+parse_allowed_models() {
+  local raw="$PORTKEY_ALLOWED_MODELS" model i j
+  [[ ${#raw} -le 4096 ]] || \
+    die 'PORTKEY_ALLOWED_MODELS must not exceed 4096 characters'
+  [[ -n "$raw" && "$raw" != ,* && "$raw" != *, && "$raw" != *,,* ]] || \
+    die 'PORTKEY_ALLOWED_MODELS must contain one or more comma-separated model IDs'
+  [[ "$raw" != *[[:space:]]* ]] || \
+    die 'PORTKEY_ALLOWED_MODELS must not contain whitespace'
+  IFS=',' read -r -a PORTKEY_ALLOWED_MODEL_IDS <<<"$raw"
+  (( ${#PORTKEY_ALLOWED_MODEL_IDS[@]} >= 1 && ${#PORTKEY_ALLOWED_MODEL_IDS[@]} <= 20 )) || \
+    die 'PORTKEY_ALLOWED_MODELS must contain between one and twenty model IDs'
+  for ((i=0; i<${#PORTKEY_ALLOWED_MODEL_IDS[@]}; i++)); do
+    model="${PORTKEY_ALLOWED_MODEL_IDS[$i]}"
+    [[ "$model" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$ ]] || \
+      die "invalid model ID in PORTKEY_ALLOWED_MODELS: $model"
+    for ((j=0; j<i; j++)); do
+      [[ "$model" != "${PORTKEY_ALLOWED_MODEL_IDS[$j]}" ]] || \
+        die "duplicate model ID in PORTKEY_ALLOWED_MODELS: $model"
+    done
+  done
+}
+model_is_allowed() {
+  local candidate="$1" model
+  for model in "${PORTKEY_ALLOWED_MODEL_IDS[@]}"; do
+    [[ "$candidate" != "$model" ]] || return 0
+  done
+  return 1
+}
 require_eksctl() {
   require_command eksctl; require_command python3
   local version
@@ -103,32 +161,48 @@ EOF
 }
 
 validate_common() {
-  [[ "$AWS_REGION" == us-east-1 ]] || die 'AWS_REGION must be us-east-1'
+  validate_region_name AWS_REGION "$AWS_REGION"
+  validate_region_name BEDROCK_MANTLE_REGION "$BEDROCK_MANTLE_REGION"
+  bedrock_mantle_region_is_supported "$BEDROCK_MANTLE_REGION" || \
+    die 'BEDROCK_MANTLE_REGION is not an AWS-documented Bedrock Mantle region'
+  [[ "$(aws_partition_for_region "$AWS_REGION")" == "$(aws_partition_for_region "$BEDROCK_MANTLE_REGION")" ]] || \
+    die 'AWS_REGION and BEDROCK_MANTLE_REGION must use the same AWS partition'
+  parse_allowed_models
   [[ "$PORTKEY_CLUSTER_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$ ]] || die 'invalid PORTKEY_CLUSTER_NAME'
   [[ "$PORTKEY_NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || die 'invalid PORTKEY_NAMESPACE'
   [[ "$PORTKEY_SERVICE_ACCOUNT" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || die 'invalid PORTKEY_SERVICE_ACCOUNT'
   [[ "$PORTKEY_INTERNAL_NLB" == true ]] || die 'PORTKEY_INTERNAL_NLB must remain true; this walkthrough does not expose Portkey API keys or prompts through a public plaintext NLB'
   [[ "$PORTKEY_LBC_HELM_CHART_VERSION" == "$SUPPORTED_LBC_HELM_CHART_VERSION" ]] || die "PORTKEY_LBC_HELM_CHART_VERSION must remain $SUPPORTED_LBC_HELM_CHART_VERSION because the checked-in IAM policy is version-matched"
+  [[ ${#BEDROCK_MANTLE_PROJECT_ID} -le 256 ]] || die 'BEDROCK_MANTLE_PROJECT_ID must not exceed 256 characters'
   [[ "$BEDROCK_MANTLE_PROJECT_ID" == '*' || "$BEDROCK_MANTLE_PROJECT_ID" == default || "$BEDROCK_MANTLE_PROJECT_ID" =~ ^proj_[A-Za-z0-9_-]+$ ]] || die 'invalid BEDROCK_MANTLE_PROJECT_ID'
 }
 
 render_cluster() {
   local output="$1"
   PORTKEY_RENDER_OUTPUT="$output" PORTKEY_CLUSTER_TEMPLATE="$CLUSTER_TEMPLATE" \
-    PORTKEY_CLUSTER_NAME="$PORTKEY_CLUSTER_NAME" python3 - <<'PY'
+    PORTKEY_CLUSTER_NAME="$PORTKEY_CLUSTER_NAME" AWS_REGION="$AWS_REGION" python3 - <<'PY'
 import os
+import re
 from pathlib import Path
 p = Path(os.environ["PORTKEY_CLUSTER_TEMPLATE"]).read_text()
-p = p.replace("__CLUSTER_NAME__", os.environ["PORTKEY_CLUSTER_NAME"])
+replacements = {
+    "__CLUSTER_NAME__": os.environ["PORTKEY_CLUSTER_NAME"],
+    "__AWS_REGION__": os.environ["AWS_REGION"],
+}
+if set(re.findall(r"__[A-Z0-9_]+__", p)) != set(replacements):
+    raise SystemExit("unexpected eksctl cluster template placeholders")
+for placeholder, value in replacements.items():
+    p = p.replace(placeholder, value)
 Path(os.environ["PORTKEY_RENDER_OUTPUT"]).write_text(p)
 PY
 }
 
 render_load_balancer_controller_service_account() {
-  local output="$1" account_id="$2" vpc_id="$3"
+  local output="$1" account_id="$2" vpc_id="$3" partition="$4"
   PORTKEY_RENDER_OUTPUT="$output" PORTKEY_LBC_POLICY_TEMPLATE="$LBC_POLICY_TEMPLATE" \
     PORTKEY_CLUSTER_NAME="$PORTKEY_CLUSTER_NAME" AWS_REGION="$AWS_REGION" \
-    PORTKEY_AWS_ACCOUNT_ID="$account_id" PORTKEY_VPC_ID="$vpc_id" python3 - <<'PY'
+    PORTKEY_AWS_ACCOUNT_ID="$account_id" PORTKEY_VPC_ID="$vpc_id" \
+    PORTKEY_AWS_PARTITION="$partition" python3 - <<'PY'
 import json
 import os
 import re
@@ -137,6 +211,8 @@ from pathlib import Path
 policy_text = Path(os.environ["PORTKEY_LBC_POLICY_TEMPLATE"]).read_text()
 replacements = {
     "__AWS_ACCOUNT_ID__": os.environ["PORTKEY_AWS_ACCOUNT_ID"],
+    "__AWS_PARTITION__": os.environ["PORTKEY_AWS_PARTITION"],
+    "__AWS_REGION__": os.environ["AWS_REGION"],
     "__VPC_ID__": os.environ["PORTKEY_VPC_ID"],
     "__CLUSTER_NAME__": os.environ["PORTKEY_CLUSTER_NAME"],
 }
@@ -209,7 +285,8 @@ aws_check() {
 plan() {
   aws_check
   aws_cli cloudformation validate-template --template-body "file://$INFRA_TEMPLATE" >/dev/null
-  printf 'CloudFormation plan is valid: S3 logs + EKS IRSA role, model %s.\n' "$MANTLE_MODEL_ID"
+  printf 'CloudFormation plan is valid: S3 logs in %s + EKS IRSA access to Mantle in %s for models %s.\n' \
+    "$AWS_REGION" "$BEDROCK_MANTLE_REGION" "$PORTKEY_ALLOWED_MODELS"
 }
 
 stack_exists() { aws_cli cloudformation describe-stacks --stack-name "$PORTKEY_STACK_NAME" >/dev/null 2>&1; }
@@ -220,7 +297,9 @@ deploy() {
   eksctl utils associate-iam-oidc-provider --cluster "$PORTKEY_CLUSTER_NAME" --region "$AWS_REGION" --approve
   aws_cli cloudformation deploy --stack-name "$PORTKEY_STACK_NAME" \
     --template-file "$INFRA_TEMPLATE" --parameter-overrides \
-      MantleProjectId="$BEDROCK_MANTLE_PROJECT_ID" MantleModelId="$MANTLE_MODEL_ID" \
+      MantleProjectId="$BEDROCK_MANTLE_PROJECT_ID" \
+      BedrockMantleRegion="$BEDROCK_MANTLE_REGION" \
+      MantleModelIds="$PORTKEY_ALLOWED_MODELS" \
     --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset \
     --tags Application=guidance-codex-portkey
   local policy_arn
@@ -254,7 +333,7 @@ render_values() {
   PORTKEY_DOCKER_USERNAME="$PORTKEY_DOCKER_USERNAME" PORTKEY_DOCKER_PASSWORD="$PORTKEY_DOCKER_PASSWORD" \
   PORTKEY_CLIENT_AUTH="$PORTKEY_CLIENT_AUTH" PORTKEY_ORGANIZATION_ID="$PORTKEY_ORGANIZATION_ID" \
   PORTKEY_GATEWAY_IMAGE_TAG="$PORTKEY_GATEWAY_IMAGE_TAG" PORTKEY_REDIS_IMAGE_TAG="$PORTKEY_REDIS_IMAGE_TAG" \
-  PORTKEY_INTERNAL_NLB="$PORTKEY_INTERNAL_NLB" python3 - <<'PY'
+  PORTKEY_INTERNAL_NLB="$PORTKEY_INTERNAL_NLB" PORTKEY_LOG_STORE_REGION="$AWS_REGION" python3 - <<'PY'
 import json, os
 from pathlib import Path
 text = Path(os.environ["PORTKEY_VALUES_TEMPLATE"]).read_text()
@@ -266,6 +345,7 @@ mapping = {
  "PORTKEY_GATEWAY_IMAGE_TAG": os.environ["PORTKEY_GATEWAY_IMAGE_TAG"],
  "PORTKEY_REDIS_IMAGE_TAG": os.environ["PORTKEY_REDIS_IMAGE_TAG"],
  "PORTKEY_LOG_BUCKET": os.environ["PORTKEY_LOG_BUCKET"],
+ "PORTKEY_LOG_STORE_REGION": os.environ["PORTKEY_LOG_STORE_REGION"],
  "PORTKEY_SERVICE_ACCOUNT": os.environ["PORTKEY_SERVICE_ACCOUNT"],
  "PORTKEY_SERVICE_ROLE_ARN": os.environ["PORTKEY_SERVICE_ROLE_ARN"],
  "PORTKEY_NLB_SCHEME": "internal" if os.environ["PORTKEY_INTERNAL_NLB"] == "true" else "internet-facing",
@@ -427,7 +507,8 @@ load_balancer_controller_plan() {
   require_command helm; require_command python3; validate_common
   local rendered; rendered="$(mktemp)"; trap "rm -f '$rendered'" EXIT
   render_load_balancer_controller_service_account \
-    "$rendered" 123456789012 vpc-0123456789abcdef0
+    "$rendered" 123456789012 vpc-0123456789abcdef0 \
+    "$(aws_partition_for_region "$AWS_REGION")"
   python3 -m json.tool "$rendered" >/dev/null
   helm repo add eks https://aws.github.io/eks-charts --force-update >/dev/null
   helm repo update eks >/dev/null
@@ -461,15 +542,16 @@ install_load_balancer_controller() {
     printf 'Retrying the existing walkthrough-managed AWS Load Balancer Controller release.\n'
   fi
 
-  local account_id rendered vpc_id
+  local account_id partition rendered vpc_id
   load_balancer_controller_plan
   account_id="$(aws_cli sts get-caller-identity --query Account --output text)"
   [[ "$account_id" =~ ^[0-9]{12}$ ]] || die 'could not resolve the AWS account ID'
   vpc_id="$(aws_cli eks describe-cluster --name "$PORTKEY_CLUSTER_NAME" \
     --query 'cluster.resourcesVpcConfig.vpcId' --output text)"
   [[ "$vpc_id" =~ ^vpc-[0-9a-f]+$ ]] || die 'could not resolve the EKS cluster VPC ID'
+  partition="$(aws_partition_for_region "$AWS_REGION")"
   rendered="$(mktemp)"; trap "rm -f '$rendered'" EXIT
-  render_load_balancer_controller_service_account "$rendered" "$account_id" "$vpc_id"
+  render_load_balancer_controller_service_account "$rendered" "$account_id" "$vpc_id" "$partition"
   if load_balancer_controller_service_account_exists; then
     load_balancer_controller_service_account_is_managed || \
       die 'refusing to overwrite an existing AWS Load Balancer Controller service account that is not managed by guidance-codex'
@@ -635,9 +717,16 @@ status() {
 }
 
 validate_target() {
+  local selected_model_id
   require_value PORTKEY_PROVIDER_SLUG; require_value PORTKEY_MODEL; require_value PORTKEY_API_KEY
   [[ "$PORTKEY_PROVIDER_SLUG" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || die 'invalid PORTKEY_PROVIDER_SLUG'
-  [[ "$PORTKEY_MODEL" == "@$PORTKEY_PROVIDER_SLUG/$MANTLE_MODEL_ID" ]] || die "PORTKEY_MODEL must be @$PORTKEY_PROVIDER_SLUG/$MANTLE_MODEL_ID"
+  [[ "$PORTKEY_MODEL" == "@$PORTKEY_PROVIDER_SLUG/"* ]] || \
+    die 'PORTKEY_MODEL must use @<PORTKEY_PROVIDER_SLUG>/<allowed-model-id>'
+  selected_model_id="${PORTKEY_MODEL#@$PORTKEY_PROVIDER_SLUG/}"
+  [[ "$selected_model_id" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$ ]] || \
+    die 'PORTKEY_MODEL contains an invalid upstream model ID'
+  model_is_allowed "$selected_model_id" || \
+    die 'PORTKEY_MODEL must select a model listed in PORTKEY_ALLOWED_MODELS'
   [[ -z "$PORTKEY_BASE_URL" || "$PORTKEY_BASE_URL" == */v1 ]] || die 'PORTKEY_BASE_URL must end in /v1'
   [[ -z "$PORTKEY_BASE_URL" || "$PORTKEY_BASE_URL" == https://* ]] || die 'PORTKEY_BASE_URL must use https; leave it empty to validate through local kubectl port-forward'
 }
@@ -670,13 +759,18 @@ EOF
 }
 
 validate() {
+  local model_id qualified_model
   check; prepare_runtime_url; trap stop_tunnel EXIT
-  PORTKEY_API_KEY="$PORTKEY_API_KEY" GATEWAY_BASE_URL="$RUNTIME_URL" \
-    GATEWAY_MODEL="$PORTKEY_MODEL" python3 "$CONTRACT_PROBE" \
-    --api-key-env PORTKEY_API_KEY --header-env x-portkey-api-key=PORTKEY_API_KEY \
-    --expected-model "$MANTLE_MODEL_ID" --require-model-listed \
-    --model-list-attempts 7 --model-list-delay 10 \
-    --require-reasoning --include-tool-call
+  for model_id in "${PORTKEY_ALLOWED_MODEL_IDS[@]}"; do
+    qualified_model="@$PORTKEY_PROVIDER_SLUG/$model_id"
+    printf 'Validating Codex Responses contract for %s.\n' "$qualified_model"
+    PORTKEY_API_KEY="$PORTKEY_API_KEY" GATEWAY_BASE_URL="$RUNTIME_URL" \
+      GATEWAY_MODEL="$qualified_model" python3 "$CONTRACT_PROBE" \
+      --api-key-env PORTKEY_API_KEY --header-env x-portkey-api-key=PORTKEY_API_KEY \
+      --expected-model "$model_id" --require-model-listed \
+      --model-list-attempts 7 --model-list-delay 10 \
+      --require-reasoning --include-tool-call
+  done
 }
 
 codex_validate() {

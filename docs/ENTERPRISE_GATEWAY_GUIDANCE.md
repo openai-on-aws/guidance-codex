@@ -40,7 +40,7 @@ customer's retention policy.
 | Capability | LiteLLM reference | Portkey evaluation |
 |------------|-------------------|--------------------|
 | Responses endpoint | Live contract probe passed in `us-east-1` | Portkey documents `/v1/responses`; strict live probe still requires a workspace key |
-| Bedrock Mantle GPT-5.x | Configured with `bedrock_mantle/` and server-side token refresh | Dedicated `bedrock-mantle` provider uses the EKS service role; live workspace evidence is pending |
+| Bedrock Mantle GPT-5.x | Configured with `bedrock_mantle/` and server-side token refresh | Dedicated `bedrock-mantle` provider uses the EKS service role and an explicit model allowlist; live workspace evidence is pending |
 | Classic Bedrock assumed role | ECS task role | Documented Portkey integration pattern |
 | OIDC/JWT | Included middleware; compare licensed LiteLLM features against current vendor terms | Verify Portkey workspace/service-account controls for the selected tier |
 | Per-user/team budgets | Vendor documented; prove blocking with customer policy | Vendor documented; prove blocking with customer policy |
@@ -101,12 +101,32 @@ Model Catalog replaces the older virtual-key-first flow. Select the dedicated
 **Bedrock Mantle** provider with **Service Role (EKS / IRSA)** authentication; classic
 **Bedrock** uses Converse/Invoke and its Responses adapter does not provide
 stateful `previous_response_id`. The repository CloudFormation path trusts only
-the configured Kubernetes service account and limits it to `openai.gpt-5.5` in
-`us-east-1`.
+the configured Kubernetes service account. `AWS_REGION` selects EKS,
+CloudFormation, S3 logging, and AWS Load Balancer Controller resources;
+`BEDROCK_MANTLE_REGION` independently selects the Mantle endpoint and IAM region
+condition. Both default to the offline-test reference region, `us-east-1`, but
+may differ when they remain in the same AWS partition.
+
+Set `PORTKEY_ALLOWED_MODELS` to an explicit comma-separated list of bare Mantle
+model IDs. `openai.gpt-5.5` is the default reference, not a hard-coded limit.
+Set `PORTKEY_MODEL=@<provider-slug>/<model-id>` to exactly one member of that
+allowlist for Codex. The helper rejects unlisted selections and never chooses a
+fallback model.
+
+Create one Portkey provider per `BEDROCK_MANTLE_REGION`. Concurrent regional
+deployments use separate clusters by default. A shared existing cluster needs a
+unique stack, namespace, service account, and Helm release per region plus a
+pre-existing compatible load-balancer controller that watches all namespaces;
+the included namespace-scoped controller cannot serve both. Redeploying one
+stack with a different region replaces that stack's IAM scope; it does not add
+a second region. Preflight checks provider-slug syntax, but cannot prove the
+region configured behind that slug. Confirm it in Portkey Model Catalog and
+with live CloudTrail `CreateInference` evidence.
 
 A Portkey evaluation can use Codex custom-provider bearer authentication:
 
 ```toml
+# PORTKEY_MODEL from the deployment environment; this example uses the default.
 model = "@bedrock-mantle-validation/openai.gpt-5.5"
 model_provider = "portkey"
 
@@ -121,22 +141,23 @@ Confirm the endpoint and key scope against the customer's Portkey workspace
 before distribution. Keep the key in the operating-system secret store or an
 approved credential helper, not in `config.toml`.
 
-The repository probe accepts the same secret headers without putting their
-values in command-line arguments:
+The deployment helper accepts the same secret headers without putting their
+values in command-line arguments. After configuring the regional provider and
+allowlist in the ignored deployment environment, run:
 
 ```bash
-export GATEWAY_BASE_URL=https://portkey-gateway.example.com/v1
-export PORTKEY_API_KEY=<secret>
-export GATEWAY_MODEL=@<bedrock-mantle-provider-slug>/openai.gpt-5.5
-
-python3 deployment/scripts/validate-responses-contract.py \
-  --api-key-env PORTKEY_API_KEY \
-  --header-env x-portkey-api-key=PORTKEY_API_KEY \
-  --expected-model openai.gpt-5.5 \
-  --require-model-listed \
-  --require-reasoning \
-  --include-tool-call
+make portkey-check
+make portkey-validate
+make portkey-codex-validate
 ```
+
+The strict validation target probes every entry in
+`PORTKEY_ALLOWED_MODELS`, requiring the exact listed model, Responses shape,
+reasoning, stored-state continuation, completed SSE events, and a forced
+function call. The isolated `codex exec` test then uses exactly
+`PORTKEY_MODEL`, reads a fixture file through a local tool, and writes a
+sentinel. An unavailable or mismatched model fails validation; neither path
+silently switches models.
 
 Portkey documents `previous_response_id` as unavailable for adapter providers,
 including classic Bedrock. Bedrock Mantle instead exposes the native Responses
@@ -144,10 +165,12 @@ API and AWS documents stored continuation. The repository probe checks that
 continuation is semantic, so a misconfigured classic adapter cannot produce a
 false pass. See the [Portkey Quick Start](QUICKSTART_LLM_GATEWAY_PORTKEY.md).
 
-Do not mark the Portkey route production-ready until the contract probe passes
-with the intended Bedrock GPT-5.x model and the following evidence is captured:
+Do not mark the Portkey route production-ready until every allowlisted model
+passes the contract probe, the selected model passes the real Codex workflow,
+and the following evidence is captured:
 
-- AWS CloudTrail identifies the EKS IRSA role and target service.
+- AWS CloudTrail identifies the EKS IRSA role, Mantle region, and each target
+  model.
 - A deliberately exceeded budget returns the expected blocking response.
 - Revoking a user or virtual key takes effect within the agreed SLA.
 - Prompt, response, and trace retention match the customer's data policy.

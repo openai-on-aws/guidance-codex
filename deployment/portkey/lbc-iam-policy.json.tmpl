@@ -13,7 +13,7 @@
       }
     },
     {
-      "Sid": "ReadVpcStateInUsEast1",
+      "Sid": "ReadVpcStateInDeploymentRegion",
       "Effect": "Allow",
       "Action": [
         "ec2:DescribeAccountAttributes",
@@ -31,12 +31,12 @@
       "Resource": "*",
       "Condition": {
         "StringEquals": {
-          "aws:RequestedRegion": "us-east-1"
+          "aws:RequestedRegion": "__AWS_REGION__"
         }
       }
     },
     {
-      "Sid": "ReadNetworkLoadBalancerStateInUsEast1",
+      "Sid": "ReadNetworkLoadBalancerStateInDeploymentRegion",
       "Effect": "Allow",
       "Action": [
         "elasticloadbalancing:DescribeListenerAttributes",
@@ -51,7 +51,7 @@
       "Resource": "*",
       "Condition": {
         "StringEquals": {
-          "aws:RequestedRegion": "us-east-1"
+          "aws:RequestedRegion": "__AWS_REGION__"
         }
       }
     },
@@ -59,10 +59,10 @@
       "Sid": "UseOnlyTheClusterVpcWhenCreatingSecurityGroups",
       "Effect": "Allow",
       "Action": "ec2:CreateSecurityGroup",
-      "Resource": "arn:aws:ec2:us-east-1:__AWS_ACCOUNT_ID__:vpc/__VPC_ID__",
+      "Resource": "arn:__AWS_PARTITION__:ec2:__AWS_REGION__:__AWS_ACCOUNT_ID__:vpc/__VPC_ID__",
       "Condition": {
         "StringEquals": {
-          "aws:RequestedRegion": "us-east-1"
+          "aws:RequestedRegion": "__AWS_REGION__"
         }
       }
     },
@@ -70,14 +70,14 @@
       "Sid": "CreateOnlyClusterTaggedSecurityGroupsInClusterVpc",
       "Effect": "Allow",
       "Action": "ec2:CreateSecurityGroup",
-      "Resource": "arn:aws:ec2:us-east-1:__AWS_ACCOUNT_ID__:security-group/*",
+      "Resource": "arn:__AWS_PARTITION__:ec2:__AWS_REGION__:__AWS_ACCOUNT_ID__:security-group/*",
       "Condition": {
         "StringEquals": {
-          "aws:RequestedRegion": "us-east-1",
+          "aws:RequestedRegion": "__AWS_REGION__",
           "aws:RequestTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__"
         },
         "ArnEquals": {
-          "ec2:Vpc": "arn:aws:ec2:us-east-1:__AWS_ACCOUNT_ID__:vpc/__VPC_ID__"
+          "ec2:Vpc": "arn:__AWS_PARTITION__:ec2:__AWS_REGION__:__AWS_ACCOUNT_ID__:vpc/__VPC_ID__"
         }
       }
     },
@@ -85,10 +85,10 @@
       "Sid": "TagControllerSecurityGroupsAtCreation",
       "Effect": "Allow",
       "Action": "ec2:CreateTags",
-      "Resource": "arn:aws:ec2:us-east-1:__AWS_ACCOUNT_ID__:security-group/*",
+      "Resource": "arn:__AWS_PARTITION__:ec2:__AWS_REGION__:__AWS_ACCOUNT_ID__:security-group/*",
       "Condition": {
         "StringEquals": {
-          "aws:RequestedRegion": "us-east-1",
+          "aws:RequestedRegion": "__AWS_REGION__",
           "aws:RequestTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__",
           "ec2:CreateAction": "CreateSecurityGroup"
         }
@@ -101,10 +101,10 @@
         "ec2:CreateTags",
         "ec2:DeleteTags"
       ],
-      "Resource": "arn:aws:ec2:us-east-1:__AWS_ACCOUNT_ID__:security-group/*",
+      "Resource": "arn:__AWS_PARTITION__:ec2:__AWS_REGION__:__AWS_ACCOUNT_ID__:security-group/*",
       "Condition": {
         "StringEquals": {
-          "aws:RequestedRegion": "us-east-1",
+          "aws:RequestedRegion": "__AWS_REGION__",
           "aws:ResourceTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__"
         }
       }
@@ -116,13 +116,13 @@
         "ec2:AuthorizeSecurityGroupIngress",
         "ec2:RevokeSecurityGroupIngress"
       ],
-      "Resource": "arn:aws:ec2:us-east-1:__AWS_ACCOUNT_ID__:security-group/*",
+      "Resource": "arn:__AWS_PARTITION__:ec2:__AWS_REGION__:__AWS_ACCOUNT_ID__:security-group/*",
       "Condition": {
         "StringEquals": {
-          "aws:RequestedRegion": "us-east-1"
+          "aws:RequestedRegion": "__AWS_REGION__"
         },
         "ArnEquals": {
-          "ec2:Vpc": "arn:aws:ec2:us-east-1:__AWS_ACCOUNT_ID__:vpc/__VPC_ID__"
+          "ec2:Vpc": "arn:__AWS_PARTITION__:ec2:__AWS_REGION__:__AWS_ACCOUNT_ID__:vpc/__VPC_ID__"
         }
       }
     },
@@ -130,14 +130,14 @@
       "Sid": "DeleteControllerSecurityGroupsOnlyInClusterVpc",
       "Effect": "Allow",
       "Action": "ec2:DeleteSecurityGroup",
-      "Resource": "arn:aws:ec2:us-east-1:__AWS_ACCOUNT_ID__:security-group/*",
+      "Resource": "arn:__AWS_PARTITION__:ec2:__AWS_REGION__:__AWS_ACCOUNT_ID__:security-group/*",
       "Condition": {
         "StringEquals": {
-          "aws:RequestedRegion": "us-east-1",
+          "aws:RequestedRegion": "__AWS_REGION__",
           "aws:ResourceTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__"
         },
         "ArnEquals": {
-          "ec2:Vpc": "arn:aws:ec2:us-east-1:__AWS_ACCOUNT_ID__:vpc/__VPC_ID__"
+          "ec2:Vpc": "arn:__AWS_PARTITION__:ec2:__AWS_REGION__:__AWS_ACCOUNT_ID__:vpc/__VPC_ID__"
         }
       }
     },
@@ -145,10 +145,10 @@
       "Sid": "CreateTaggedInternalNetworkLoadBalancers",
       "Effect": "Allow",
       "Action": "elasticloadbalancing:CreateLoadBalancer",
-      "Resource": "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:loadbalancer/net/*/*",
+      "Resource": "arn:__AWS_PARTITION__:elasticloadbalancing:__AWS_REGION__:__AWS_ACCOUNT_ID__:loadbalancer/net/*/*",
       "Condition": {
         "StringEquals": {
-          "aws:RequestedRegion": "us-east-1",
+          "aws:RequestedRegion": "__AWS_REGION__",
           "aws:RequestTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__",
           "elasticloadbalancing:Scheme": "internal"
         }
@@ -158,10 +158,10 @@
       "Sid": "CreateTaggedTargetGroups",
       "Effect": "Allow",
       "Action": "elasticloadbalancing:CreateTargetGroup",
-      "Resource": "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:targetgroup/*/*",
+      "Resource": "arn:__AWS_PARTITION__:elasticloadbalancing:__AWS_REGION__:__AWS_ACCOUNT_ID__:targetgroup/*/*",
       "Condition": {
         "StringEquals": {
-          "aws:RequestedRegion": "us-east-1",
+          "aws:RequestedRegion": "__AWS_REGION__",
           "aws:RequestTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__"
         }
       }
@@ -170,10 +170,10 @@
       "Sid": "CreateTaggedTcpListenersOnControllerLoadBalancers",
       "Effect": "Allow",
       "Action": "elasticloadbalancing:CreateListener",
-      "Resource": "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:loadbalancer/net/*/*",
+      "Resource": "arn:__AWS_PARTITION__:elasticloadbalancing:__AWS_REGION__:__AWS_ACCOUNT_ID__:loadbalancer/net/*/*",
       "Condition": {
         "StringEquals": {
-          "aws:RequestedRegion": "us-east-1",
+          "aws:RequestedRegion": "__AWS_REGION__",
           "aws:RequestTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__",
           "aws:ResourceTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__",
           "elasticloadbalancing:ListenerProtocol": "TCP"
@@ -185,13 +185,13 @@
       "Effect": "Allow",
       "Action": "elasticloadbalancing:AddTags",
       "Resource": [
-        "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:listener/net/*/*/*",
-        "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:loadbalancer/net/*/*",
-        "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:targetgroup/*/*"
+        "arn:__AWS_PARTITION__:elasticloadbalancing:__AWS_REGION__:__AWS_ACCOUNT_ID__:listener/net/*/*/*",
+        "arn:__AWS_PARTITION__:elasticloadbalancing:__AWS_REGION__:__AWS_ACCOUNT_ID__:loadbalancer/net/*/*",
+        "arn:__AWS_PARTITION__:elasticloadbalancing:__AWS_REGION__:__AWS_ACCOUNT_ID__:targetgroup/*/*"
       ],
       "Condition": {
         "StringEquals": {
-          "aws:RequestedRegion": "us-east-1",
+          "aws:RequestedRegion": "__AWS_REGION__",
           "aws:RequestTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__",
           "elasticloadbalancing:CreateAction": [
             "CreateListener",
@@ -209,13 +209,13 @@
         "elasticloadbalancing:RemoveTags"
       ],
       "Resource": [
-        "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:listener/net/*/*/*",
-        "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:loadbalancer/net/*/*",
-        "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:targetgroup/*/*"
+        "arn:__AWS_PARTITION__:elasticloadbalancing:__AWS_REGION__:__AWS_ACCOUNT_ID__:listener/net/*/*/*",
+        "arn:__AWS_PARTITION__:elasticloadbalancing:__AWS_REGION__:__AWS_ACCOUNT_ID__:loadbalancer/net/*/*",
+        "arn:__AWS_PARTITION__:elasticloadbalancing:__AWS_REGION__:__AWS_ACCOUNT_ID__:targetgroup/*/*"
       ],
       "Condition": {
         "StringEquals": {
-          "aws:RequestedRegion": "us-east-1",
+          "aws:RequestedRegion": "__AWS_REGION__",
           "aws:ResourceTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__"
         }
       }
@@ -230,10 +230,10 @@
         "elasticloadbalancing:SetSecurityGroups",
         "elasticloadbalancing:SetSubnets"
       ],
-      "Resource": "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:loadbalancer/net/*/*",
+      "Resource": "arn:__AWS_PARTITION__:elasticloadbalancing:__AWS_REGION__:__AWS_ACCOUNT_ID__:loadbalancer/net/*/*",
       "Condition": {
         "StringEquals": {
-          "aws:RequestedRegion": "us-east-1",
+          "aws:RequestedRegion": "__AWS_REGION__",
           "aws:ResourceTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__"
         }
       }
@@ -246,10 +246,10 @@
         "elasticloadbalancing:ModifyListener",
         "elasticloadbalancing:ModifyListenerAttributes"
       ],
-      "Resource": "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:listener/net/*/*/*",
+      "Resource": "arn:__AWS_PARTITION__:elasticloadbalancing:__AWS_REGION__:__AWS_ACCOUNT_ID__:listener/net/*/*/*",
       "Condition": {
         "StringEquals": {
-          "aws:RequestedRegion": "us-east-1",
+          "aws:RequestedRegion": "__AWS_REGION__",
           "aws:ResourceTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__"
         }
       }
@@ -264,10 +264,10 @@
         "elasticloadbalancing:ModifyTargetGroupAttributes",
         "elasticloadbalancing:RegisterTargets"
       ],
-      "Resource": "arn:aws:elasticloadbalancing:us-east-1:__AWS_ACCOUNT_ID__:targetgroup/*/*",
+      "Resource": "arn:__AWS_PARTITION__:elasticloadbalancing:__AWS_REGION__:__AWS_ACCOUNT_ID__:targetgroup/*/*",
       "Condition": {
         "StringEquals": {
-          "aws:RequestedRegion": "us-east-1",
+          "aws:RequestedRegion": "__AWS_REGION__",
           "aws:ResourceTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__"
         }
       }

@@ -28,7 +28,7 @@ environment:
     REDIS_URL: "redis://redis:6379"
     REDIS_TLS_ENABLED: "false"
     LOG_STORE: s3_assume
-    LOG_STORE_REGION: us-east-1
+    LOG_STORE_REGION: __PORTKEY_LOG_STORE_REGION__
     LOG_STORE_GENERATIONS_BUCKET: __PORTKEY_LOG_BUCKET__
 
 serviceAccount:
