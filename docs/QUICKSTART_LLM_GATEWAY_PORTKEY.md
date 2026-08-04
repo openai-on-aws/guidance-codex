@@ -15,6 +15,95 @@ plane is a separate vendor-assisted Enterprise deployment.
 Portkey's supported [EKS deployment](https://portkey.ai/docs/self-hosting/hybrid-deployments/aws/eks)
 requires licensed images and a client-auth license supplied by Portkey.
 
+## Portkey dependencies you must arrange manually
+
+This guide automates the AWS data plane, not the Portkey Enterprise entitlement
+or managed control plane. Obtain or configure these before the corresponding
+deployment step:
+
+- Portkey client-auth license, organization ID, Docker registry credentials, a
+  Portkey-supported gateway image tag pinned to a non-`latest` version, a
+  supported Helm chart version, and a patch-pinned Redis image tag;
+- a Portkey organization/workspace enabled for Hybrid deployment and outbound
+  EKS access to `api.portkey.ai` and `albus.portkey.ai` for data-plane
+  configuration sync. This is the path implemented by the included Helm
+  values. Portkey also supports outbound PrivateLink, but it requires
+  vendor-assisted onboarding and additional `ALBUS_BASEPATH`,
+  `CONTROL_PLANE_BASEPATH`, `SOURCE_SYNC_API_BASEPATH`, and
+  `CONFIG_READER_PATH` settings that this repository does not expose; treat it
+  as a separate, out-of-band customization;
+- a manually configured **Bedrock Mantle** Model Catalog provider using the EKS
+  service role and selected Mantle region; the repository's
+  `PORTKEY_ALLOWED_MODELS` setting, IAM policy, and probes enforce the model
+  allowlist;
+- a Portkey **Workspace Service** API key with `completions.write` for the Codex
+  checks and evaluation. Admin API keys cannot call inference endpoints.
+  Playground, Prompt Studio, and Model Catalog test requests instead require a
+  **Workspace User** API key with `completions.write`; and
+- a distinct Portkey-assisted inbound PrivateLink endpoint-service flow when
+  the managed control plane must reach the internal NLB for complete dashboard
+  log visibility. Basic inference and local port-forward checks do not require
+  this inbound connection.
+
+The CloudFormation, `eksctl`, Helm, and Make workflows do not create or issue
+these Portkey-side dependencies.
+
+## Happy path
+
+This is the recommended staged sequence for the included non-production
+sandbox. The numbered sections below explain each command, security boundary,
+and existing cluster variation.
+
+1. Arrange the Enterprise entitlement, deployment artifacts, and internet
+   egress listed above. Defer the Model Catalog provider, provider slug,
+   selected model, and inference API key until step 4, after the gateway IRSA
+   role exists. Create the ignored environment file and populate the remaining
+   settings:
+
+   ```bash
+   install -m 600 deployment/portkey/.env.deploy.example deployment/portkey/.env.deploy
+   ```
+
+2. Review each plan, then deploy the sandbox cluster, AWS resources, and
+   licensed gateway:
+
+   ```bash
+   # Skip the cluster commands when using an existing compatible EKS cluster.
+   make portkey-cluster-plan
+   CONFIRM_AWS_WRITE=1 make portkey-cluster-deploy
+
+   make portkey-aws-check
+   make portkey-aws-plan
+   CONFIRM_AWS_WRITE=1 make portkey-aws-deploy
+
+   # Existing clusters only: run these before the Helm deployment.
+   make portkey-lbc-plan
+   CONFIRM_AWS_WRITE=1 make portkey-lbc-deploy
+   make portkey-lbc-status
+
+   make portkey-helm-plan
+   CONFIRM_AWS_WRITE=1 make portkey-helm-deploy
+   make portkey-status
+   ```
+
+3. Confirm outbound data-plane-to-control-plane configuration sync over the
+   internet-egress path implemented by the included Helm values. If outbound
+   PrivateLink is required, stop and complete the separate Portkey-assisted
+   customization before continuing. When full managed dashboard/log evidence
+   is required, complete the distinct inbound control-plane-to-data-plane
+   PrivateLink onboarding for the internal NLB.
+4. In Portkey Model Catalog, create the **Bedrock Mantle** provider with
+   **Service Role (EKS / IRSA)**. Then record `PORTKEY_PROVIDER_SLUG`, select an
+   allowlisted `PORTKEY_MODEL`, and add a Workspace Service `PORTKEY_API_KEY`
+   with `completions.write` to `.env.deploy`.
+5. Run the configuration, strict contract, and real Codex checks:
+
+   ```bash
+   make portkey-check
+   make portkey-validate
+   make portkey-codex-validate
+   ```
+
 ## Architecture
 
 ```text
@@ -42,9 +131,8 @@ shell, filesystem, approvals, and sandbox.
   optional two-node sandbox cluster;
 - permission to install the AWS Load Balancer Controller, or an existing ready
   controller for NLB IP targets;
-- Portkey Enterprise Docker username/password, immutable gateway image tag,
-  patch-pinned Redis image tag, pinned Helm chart version, client-auth license, organization ID,
-  and workspace API key.
+- the Portkey-side artifacts, control-plane connectivity, Model Catalog access,
+  and workspace authentication listed in the checklist above.
 
 Copy the ignored environment file:
 

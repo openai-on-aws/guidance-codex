@@ -10,6 +10,45 @@ This is different from the hosted path: `api.portkey.ai` is not the Codex data
 endpoint. It is also not fully air-gapped; an air-gapped control plane requires
 separate Portkey Enterprise artifacts.
 
+## Portkey-supplied and manual prerequisites
+
+The repository provisions the AWS data plane; it does not create the Portkey
+Enterprise entitlement or managed control-plane configuration. Confirm access
+and ownership for these dependencies before starting, then complete each at the
+noted deployment stage:
+
+- **Enterprise deployment artifacts:** client-auth license, organization ID,
+  Docker registry credentials, a Portkey-supported gateway image tag pinned to
+  a non-`latest` version, a supported Helm chart version, and a patch-pinned
+  Redis image tag.
+- **Outbound configuration sync (data plane to control plane):** a Portkey
+  organization/workspace enabled for Hybrid deployment and EKS egress to
+  `api.portkey.ai` and `albus.portkey.ai`. This is the path implemented by the
+  included Helm values. Portkey also supports outbound PrivateLink, but that
+  requires vendor-assisted onboarding and additional `ALBUS_BASEPATH`,
+  `CONTROL_PLANE_BASEPATH`, `SOURCE_SYNC_API_BASEPATH`, and
+  `CONFIG_READER_PATH` settings that this repository does not expose. Treat it
+  as a separate, out-of-band customization.
+- **Inbound managed access (control plane to data plane):** full dashboard log
+  visibility through this guide's internal NLB requires a distinct,
+  Portkey-assisted PrivateLink endpoint-service and connection-approval flow.
+  Basic inference and local port-forward checks do not require this inbound
+  connection.
+- **Model Catalog configuration:** after the gateway IRSA role exists, manually
+  create a **Bedrock Mantle** provider using **Service Role (EKS / IRSA)**,
+  select `BEDROCK_MANTLE_REGION`, and record the provider slug in the ignored
+  `.env.deploy` file. Configure `PORTKEY_ALLOWED_MODELS` locally; the generated
+  IAM policy and strict probes enforce that allowlist.
+- **Workspace authentication:** create a Portkey **Workspace Service** API key
+  with `completions.write` for the Codex checks and evaluation. Admin API keys
+  cannot call inference endpoints. Playground, Prompt Studio, and Model Catalog
+  test requests instead require a **Workspace User** API key with
+  `completions.write`. Store keys only in `.env.deploy` or an approved secret
+  store, and revoke evaluation keys when the evaluation ends.
+
+These are required dependencies, not resources created by CloudFormation,
+`eksctl`, Helm, or the Make targets in this repository.
+
 ## Files
 
 - `.env.deploy.example` — non-secret settings and names of required secrets.
@@ -62,13 +101,17 @@ CloudTrail `CreateInference` evidence in `BEDROCK_MANTLE_REGION`.
 
 ## Deployment sequence
 
-1. Obtain an immutable Enterprise gateway image tag, Docker credentials, a client auth
-   license, and the organization ID from Portkey. Pin the tested Helm chart
-   version in `.env.deploy` as well.
+1. Arrange the Portkey Enterprise entitlement, deployment artifacts, and
+   internet-egress control-plane connectivity above. Pin the supported gateway,
+   Helm, and Redis versions in `.env.deploy`. Defer the Model Catalog provider,
+   provider slug, selected model, and inference API key until step 7, after the
+   gateway IRSA role exists.
 2. Run
    `install -m 600 deployment/portkey/.env.deploy.example deployment/portkey/.env.deploy`
-   and populate the resulting file. Set `AWS_REGION` for EKS/log/load-balancer
-   resources, `BEDROCK_MANTLE_REGION` for inference, and an explicit
+   and populate the pre-provider settings in the resulting file. Leave
+   `PORTKEY_PROVIDER_SLUG`, `PORTKEY_MODEL`, and `PORTKEY_API_KEY` for step 7.
+   Set `AWS_REGION` for EKS/log/load-balancer resources,
+   `BEDROCK_MANTLE_REGION` for inference, and an explicit
    `PORTKEY_ALLOWED_MODELS` list.
 3. Use an existing EKS cluster or run `make portkey-cluster-plan` followed by
    `CONFIRM_AWS_WRITE=1 make portkey-cluster-deploy`. The included cluster path
@@ -85,9 +128,13 @@ CloudTrail `CreateInference` evidence in `BEDROCK_MANTLE_REGION`.
    its pinned version, cluster name, and watch namespace are compatible.
 6. Run `make portkey-helm-plan` and
    `CONFIRM_AWS_WRITE=1 make portkey-helm-deploy`.
-7. In Portkey Model Catalog, create a **Bedrock Mantle** provider using
-   **Service Role (EKS / IRSA)** and `BEDROCK_MANTLE_REGION`; record its slug
-   locally. Do not reuse that provider slug for a different Mantle region.
+7. Confirm that the gateway synchronizes configuration over the documented
+   internet-egress path. Then, in Portkey Model Catalog, create a **Bedrock
+   Mantle** provider using **Service Role (EKS / IRSA)** and
+   `BEDROCK_MANTLE_REGION`; set `PORTKEY_PROVIDER_SLUG` and an allowlisted
+   `PORTKEY_MODEL` locally. Add a Workspace Service `PORTKEY_API_KEY` with
+   `completions.write`. Do not reuse that provider slug for a different Mantle
+   region.
 8. Run `make portkey-validate` and `make portkey-codex-validate`.
 
 The strict validation target waits up to one minute for Model Catalog sync and
