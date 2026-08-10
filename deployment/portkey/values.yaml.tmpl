@@ -38,14 +38,28 @@ serviceAccount:
   annotations:
     eks.amazonaws.com/role-arn: __PORTKEY_SERVICE_ROLE_ARN__
 
+# This path intentionally exposes exactly one internal NLB Service. Keep the
+# vendor chart's alternate Ingress and MCP Service surfaces disabled explicitly.
+ingress:
+  enabled: false
+
+mcpService:
+  enabled: false
+
 service:
   type: LoadBalancer
-  port: 80
+  port: 443
   containerPort: 8787
   annotations:
     service.beta.kubernetes.io/aws-load-balancer-type: "external"
-    service.beta.kubernetes.io/aws-load-balancer-scheme: __PORTKEY_NLB_SCHEME__
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internal"
+    service.beta.kubernetes.io/aws-load-balancer-ip-address-type: "ipv4"
     service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-cert: __PORTKEY_NLB_TLS_CERTIFICATE_ARN__
+    service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-negotiation-policy: "ELBSecurityPolicy-TLS13-1-2-2021-06"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "tcp"
+    service.beta.kubernetes.io/aws-load-balancer-security-group-prefix-lists: __PORTKEY_NLB_ALLOWED_PREFIX_LIST_IDS__
     service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: "/v1/health"
     service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: "http"
     service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "8787"
