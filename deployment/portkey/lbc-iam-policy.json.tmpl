@@ -39,6 +39,7 @@
       "Sid": "ReadNetworkLoadBalancerStateInDeploymentRegion",
       "Effect": "Allow",
       "Action": [
+        "elasticloadbalancing:DescribeListenerCertificates",
         "elasticloadbalancing:DescribeListenerAttributes",
         "elasticloadbalancing:DescribeListeners",
         "elasticloadbalancing:DescribeLoadBalancerAttributes",
@@ -167,16 +168,19 @@
       }
     },
     {
-      "Sid": "CreateTaggedTcpListenersOnControllerLoadBalancers",
+      "Sid": "CreateTaggedTlsListenersOnControllerLoadBalancers",
       "Effect": "Allow",
       "Action": "elasticloadbalancing:CreateListener",
       "Resource": "arn:__AWS_PARTITION__:elasticloadbalancing:__AWS_REGION__:__AWS_ACCOUNT_ID__:loadbalancer/net/*/*",
       "Condition": {
+        "ForAnyValue:StringEquals": {
+          "elasticloadbalancing:ListenerProtocol": ["TLS"],
+          "elasticloadbalancing:SecurityPolicy": ["ELBSecurityPolicy-TLS13-1-2-2021-06"]
+        },
         "StringEquals": {
           "aws:RequestedRegion": "__AWS_REGION__",
           "aws:RequestTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__",
-          "aws:ResourceTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__",
-          "elasticloadbalancing:ListenerProtocol": "TCP"
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__"
         }
       }
     },
@@ -239,12 +243,29 @@
       }
     },
     {
+      "Sid": "ModifyOnlyTlsListenersOnControllerLoadBalancers",
+      "Effect": "Allow",
+      "Action": "elasticloadbalancing:ModifyListener",
+      "Resource": "arn:__AWS_PARTITION__:elasticloadbalancing:__AWS_REGION__:__AWS_ACCOUNT_ID__:listener/net/*/*/*",
+      "Condition": {
+        "ForAnyValue:StringEquals": {
+          "elasticloadbalancing:ListenerProtocol": ["TLS"],
+          "elasticloadbalancing:SecurityPolicy": ["ELBSecurityPolicy-TLS13-1-2-2021-06"]
+        },
+        "StringEquals": {
+          "aws:RequestedRegion": "__AWS_REGION__",
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "__CLUSTER_NAME__"
+        }
+      }
+    },
+    {
       "Sid": "ManageControllerNetworkLoadBalancerListeners",
       "Effect": "Allow",
       "Action": [
+        "elasticloadbalancing:AddListenerCertificates",
         "elasticloadbalancing:DeleteListener",
-        "elasticloadbalancing:ModifyListener",
-        "elasticloadbalancing:ModifyListenerAttributes"
+        "elasticloadbalancing:ModifyListenerAttributes",
+        "elasticloadbalancing:RemoveListenerCertificates"
       ],
       "Resource": "arn:__AWS_PARTITION__:elasticloadbalancing:__AWS_REGION__:__AWS_ACCOUNT_ID__:listener/net/*/*/*",
       "Condition": {
