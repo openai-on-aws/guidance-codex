@@ -1,0 +1,108 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS resources used by the Portkey Hybrid gateway on Amazon EKS.
+
+Parameters:
+  MantleProjectId:
+    Type: String
+    Default: '*'
+    MaxLength: 256
+    AllowedPattern: '^(\*|default|proj_[A-Za-z0-9_-]+)$'
+  BedrockMantleRegion:
+    Type: String
+    Default: us-east-1
+    MaxLength: 32
+    AllowedValues:
+      - ap-northeast-1
+      - ap-south-1
+      - ap-southeast-2
+      - ap-southeast-3
+      - eu-central-1
+      - eu-north-1
+      - eu-south-1
+      - eu-west-1
+      - eu-west-2
+      - sa-east-1
+      - us-east-1
+      - us-east-2
+      - us-gov-west-1
+      - us-west-2
+    ConstraintDescription: Must be an AWS-documented Bedrock Mantle region.
+  MantleModelIds:
+    Type: String
+    Default: openai.gpt-5.5
+    MaxLength: 4096
+    AllowedPattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}(,[A-Za-z0-9][A-Za-z0-9._:-]{0,255}){0,19}$'
+    ConstraintDescription: Must contain one to twenty comma-separated model IDs without wildcards or spaces.
+
+Resources:
+  GatewayLogBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireGatewayLogs
+            Status: Enabled
+            ExpirationInDays: 30
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 7
+      Tags:
+        - Key: Application
+          Value: guidance-codex-portkey
+
+  GatewayManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Permissions attached to the Portkey EKS IRSA role by eksctl.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: [s3:ListBucket, s3:GetBucketLocation]
+            Resource: !GetAtt GatewayLogBucket.Arn
+          - Effect: Allow
+            Action: [s3:GetObject, s3:PutObject, s3:AbortMultipartUpload]
+            Resource: !Sub '${GatewayLogBucket.Arn}/*'
+          - Sid: InvokeApprovedModel
+            Effect: Allow
+            Action: [bedrock-mantle:CreateInference]
+            Resource: !Sub 'arn:${AWS::Partition}:bedrock-mantle:${BedrockMantleRegion}:${AWS::AccountId}:project/${MantleProjectId}'
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref BedrockMantleRegion
+                bedrock-mantle:Model: !Split [',', !Ref MantleModelIds]
+          - Sid: ReadApprovedProjectResponses
+            Effect: Allow
+            Action:
+              - bedrock-mantle:GetInference
+              - bedrock-mantle:CancelInference
+              - bedrock-mantle:GetProject
+              - bedrock-mantle:ListModels
+            Resource: !Sub 'arn:${AWS::Partition}:bedrock-mantle:${BedrockMantleRegion}:${AWS::AccountId}:project/${MantleProjectId}'
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref BedrockMantleRegion
+
+Outputs:
+  GatewayManagedPolicyArn:
+    Value: !Ref GatewayManagedPolicy
+  GatewayLogBucketName:
+    Value: !Ref GatewayLogBucket
+  BedrockMantleRegion:
+    Value: !Ref BedrockMantleRegion
+  MantleModelIds:
+    Value: !Ref MantleModelIds
+  RetainedResources:
+    Value: !Sub 'S3 log bucket ${GatewayLogBucket} is retained when the stack is deleted.'

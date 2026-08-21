@@ -24,6 +24,10 @@ jobs:
         with:
           enable-cache: true
 
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310
+        with:
+          version: v3.21.4
+
       - name: Create validation environment
         run: |
           uv venv --python 3.12
@@ -52,6 +56,7 @@ jobs:
           deployment/infrastructure/bedrock-auth-idc.yaml
           deployment/litellm/ecs/litellm-ecs.yaml
           deployment/litellm/ecs/user-key-mapping.yaml
+          deployment/portkey/hybrid-infrastructure.yaml
           --ignore-checks W6001 W3037
 
       - name: Validate shell syntax

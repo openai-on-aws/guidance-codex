@@ -1,0 +1,69 @@
+images:
+  gatewayImage:
+    repository: "docker.io/portkeyai/gateway_enterprise"
+    pullPolicy: Always
+    tag: __PORTKEY_GATEWAY_IMAGE_REFERENCE__
+  redisImage:
+    repository: "docker.io/redis"
+    pullPolicy: IfNotPresent
+    tag: __PORTKEY_REDIS_IMAGE_REFERENCE__
+
+imageCredentials:
+  - name: portkey-enterprise-registry-credentials
+    create: true
+    registry: "https://index.docker.io/v1/"
+    username: __PORTKEY_DOCKER_USERNAME__
+    password: __PORTKEY_DOCKER_PASSWORD__
+
+environment:
+  create: true
+  secret: true
+  data:
+    ANALYTICS_STORE: control_plane
+    SERVICE_NAME: gateway
+    PORTKEY_CLIENT_AUTH: __PORTKEY_CLIENT_AUTH__
+    ORGANISATIONS_TO_SYNC: __PORTKEY_ORGANIZATION_ID__
+    PORT: "8787"
+    CACHE_STORE: redis
+    REDIS_URL: "redis://redis:6379"
+    REDIS_TLS_ENABLED: "false"
+    LOG_STORE: s3_assume
+    LOG_STORE_REGION: __PORTKEY_LOG_STORE_REGION__
+    LOG_STORE_GENERATIONS_BUCKET: __PORTKEY_LOG_BUCKET__
+
+serviceAccount:
+  create: false
+  automount: true
+  name: __PORTKEY_SERVICE_ACCOUNT__
+  annotations:
+    eks.amazonaws.com/role-arn: __PORTKEY_SERVICE_ROLE_ARN__
+
+# This path intentionally exposes exactly one internal NLB Service. Keep the
+# vendor chart's alternate Ingress and MCP Service surfaces disabled explicitly.
+ingress:
+  enabled: false
+
+mcpService:
+  enabled: false
+
+redis:
+  serviceType: ClusterIP
+
+service:
+  type: LoadBalancer
+  port: 443
+  containerPort: 8787
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "external"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internal"
+    service.beta.kubernetes.io/aws-load-balancer-ip-address-type: "ipv4"
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-cert: __PORTKEY_NLB_TLS_CERTIFICATE_ARN__
+    service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-negotiation-policy: "ELBSecurityPolicy-TLS13-1-2-2021-06"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "tcp"
+    service.beta.kubernetes.io/aws-load-balancer-security-group-prefix-lists: __PORTKEY_NLB_ALLOWED_PREFIX_LIST_IDS__
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: "/v1/health"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: "http"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "8787"
+    service.beta.kubernetes.io/aws-load-balancer-manage-backend-security-group-rules: "true"

@@ -8,6 +8,7 @@ deployment/litellm/.deploy-state
 deployment/idc/.env.deploy
 deployment/idc/.deploy-state
 deployment/portkey/.env.deploy
+deployment/portkey/.evidence/
 
 # Rendered per-developer sidecar configs (contain identity/org attributes)
 # produced by generate-sidecar-config.sh — never commit
