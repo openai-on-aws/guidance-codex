@@ -25,9 +25,13 @@ and ownership for these dependencies before starting, then complete each at the
 noted deployment stage:
 
 - **Enterprise deployment artifacts:** client-auth license, organization ID,
-  Docker registry credentials, a Portkey-supported gateway image tag pinned to
-  a non-`latest` version, a supported Helm chart version, and a patch-pinned
-  Redis image tag.
+  Docker registry credentials, a supported Helm chart version, and approved
+  gateway and Redis image tag/digest pairs. The gateway tag must be a
+  Portkey-supported release rather than `latest`, `edge`, or `main-latest`;
+  Redis remains patch-tagged. Each digest must be the matching
+  `sha256:<64-lowercase-hex>` registry digest. The sample cluster uses
+  `t4g.medium` nodes, so each digest must identify a multi-architecture index
+  containing `linux/arm64` or a compatible `linux/arm64` manifest.
 - **Worker-node image pulls:** node/container-runtime access to the Docker Hub
   registry, authentication, and content endpoints required by the hard-coded
   `docker.io/portkeyai/gateway_enterprise` and `docker.io/redis` repositories.
@@ -79,9 +83,14 @@ noted deployment stage:
 - **Exclusive deployment names:** verify that `PORTKEY_STACK_NAME`, the
   `PORTKEY_NAMESPACE`/`PORTKEY_SERVICE_ACCOUNT` pair, and
   `PORTKEY_HELM_RELEASE` are unused or explicitly dedicated to this deployment.
-  The stack deploy can update a same-named stack, the gateway service-account
-  command uses `--override-existing-serviceaccounts`, and Helm can update a
-  same-named release; the helper does not validate their prior ownership.
+  The helper never adopts an existing gateway service account. It creates one
+  only when both the account and its deterministic `eksctl` IAM stack are
+  absent, and permits an idempotent rerun only after verifying the existing
+  pair's stack, role, trust, policy attachment, and service-account annotation.
+  A partial, unmanaged, drifted, or unreadable pair fails before any write and
+  must be resolved with its owner or replaced with unique names. A same-named
+  CloudFormation stack or Helm release can still be updated, so verify their
+  ownership separately.
 
 These are required dependencies, not resources created by CloudFormation,
 `eksctl`, Helm, or the Make targets in this repository.
@@ -97,6 +106,8 @@ These are required dependencies, not resources created by CloudFormation,
 - `hybrid-infrastructure.yaml` — retained S3 log bucket and scoped IAM policy;
   the driver uses `eksctl` to bind that policy to an IRSA service account.
 - `values.yaml.tmpl` — vendor-supported Helm configuration with placeholders.
+- `portkey-post-renderer.sh` — fail-closed Helm post-rendering for the exact
+  gateway Service field that chart 1.7.7 does not expose.
 - `../scripts/portkey-stack.sh` — plan, deploy, validate, and teardown driver.
 
 The driver requires `.env.deploy` mode `0600` or `0400`, does not blanket-export
@@ -110,6 +121,10 @@ this workflow's walkthrough-managed controller IAM stack, because that
 mutation is validated against 0.229.0's generated CloudFormation shape.
 External-controller reuse and status or cleanup flows retain the `>=0.229.0`
 requirement; they do not require the exact pin.
+
+Use Helm CLI 3; CI and the reference render test use 3.21.4. Helm 4 changes
+`--post-renderer` to plugin semantics and is unsupported because this workflow
+uses a checked-in executable post-renderer.
 
 The AWS deployer needs read access for the fail-closed preflight in addition to
 the documented deployment mutations: `sts:GetCallerIdentity`,
@@ -160,10 +175,10 @@ CloudTrail `CreateInference` evidence in `BEDROCK_MANTLE_REGION`.
 1. Arrange the Portkey Enterprise entitlement, deployment artifacts,
    internet-egress control-plane connectivity, private client routing and DNS,
    issued same-region ACM certificate, controlled hostname, and approved
-   corporate/VPN prefix list above. Pin the supported gateway, Helm, and Redis
-   versions in `.env.deploy`. Defer the Model Catalog provider, provider slug,
-   selected model, and inference API key until step 7, after the gateway IRSA
-   role exists.
+   corporate/VPN prefix list above. Record the supported Helm version and
+   approved gateway and Redis tag/digest pairs in `.env.deploy`. Defer the
+   Model Catalog provider, provider slug, selected model, and inference API key
+   until step 7, after the gateway IRSA role exists.
 2. Run
    `install -m 600 deployment/portkey/.env.deploy.example deployment/portkey/.env.deploy`
    and populate the pre-provider settings in the resulting file. Leave
@@ -183,7 +198,11 @@ CloudTrail `CreateInference` evidence in `BEDROCK_MANTLE_REGION`.
    Services. Listener tagging is explicit, while ALB-only Shield and WAF
    integrations are disabled to match the NLB-only policy.
 4. Run `make portkey-aws-check`, `make portkey-aws-plan`, and
-   `CONFIRM_AWS_WRITE=1 make portkey-aws-deploy`.
+   `CONFIRM_AWS_WRITE=1 make portkey-aws-deploy`. On a fresh deployment the
+   gateway service account and deterministic `eksctl` IAM stack must both be
+   absent. A later project/model-policy tightening rerun is idempotent only
+   when both existing resources pass the ownership checks; all collision and
+   partial-state cases stop before mutation.
 5. For an existing cluster, run `make portkey-lbc-plan`,
    `CONFIRM_AWS_WRITE=1 make portkey-lbc-deploy`, and
    `make portkey-lbc-status`. A ready existing controller is reused only when
@@ -205,6 +224,24 @@ CloudTrail `CreateInference` evidence in `BEDROCK_MANTLE_REGION`.
    `completions.write`. Do not reuse that provider slug for a different Mantle
    region.
 8. Run `make portkey-validate` and `make portkey-codex-validate`.
+
+Helm plan/deploy requires both approved image pairs. It renders each workload
+as `repository:<tag>@<configured-digest>`; Kubernetes uses the digest as the
+content identity even if a registry later moves the tag. This is an integrity
+pin, not proof of publisher signature or provenance. The workflow validates
+reference syntax but does not resolve private registry tags; obtain and approve
+each matching pair through Portkey or the organization's registry-promotion
+process. An existing `.env.deploy` without both digest values fails before Helm
+writes to Kubernetes. Roll back by restoring a previously approved tag/digest
+pair and running the normal Helm deployment, not by selecting a Helm revision
+that predates digest enforcement.
+
+The rendered chart keeps Redis cluster-internal with a `ClusterIP` Service.
+The gateway remains the only `LoadBalancer` Service, uses IP targets, and sets
+`allocateLoadBalancerNodePorts: false`; neither Service may contain a
+`nodePort`. The checked-in post-renderer supplies the gateway field that the
+pinned chart does not expose, and the same renderer is mandatory for plan and
+deploy.
 
 Reusing an externally managed, ready controller requires a fresh cluster-owner
 attestation on every command that relies on it:
@@ -243,7 +280,9 @@ not only the rendered Helm plan. Confirm that the load balancer is internal,
 has only a TLS listener on port 443 with the expected certificate and TLS
 policy, has no plaintext port-80 listener, and limits frontend ingress to the
 configured customer-managed prefix list. Confirm healthy port-8787 targets,
-the expected private DNS answer, successful access from an approved routed
+that the gateway is the sole `LoadBalancer`, that Redis is `ClusterIP`, and
+that neither Service has a NodePort allocation. Also confirm the expected
+private DNS answer, successful access from an approved routed
 client, and rejection from an unapproved routed client. Run a long-lived SSE
 request as an acceptance check: an NLB TLS listener has a
 [fixed 350-second idle timeout](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/update-idle-timeout.html),
@@ -301,6 +340,17 @@ configuration.
 
 ## Existing deployments and migration stops
 
+An existing release may already have NodePorts allocated by chart defaults.
+Before changing it, the helper proves that the gateway is the expected
+single-port, IP-target `LoadBalancer` Service. Under the normal write
+confirmation it then disables future allocation and removes the existing
+gateway `nodePort` in one patch; IP targets route directly to pods, so this does
+not require replacing the NLB. Helm also changes the built-in Redis Service to
+`ClusterIP`, removing its NodePort surface. Any unexpected Service shape,
+target mode, lookup failure, or post-deployment NodePort stops the workflow
+instead of being patched speculatively. This in-place NodePort migration is
+separate from the legacy plaintext endpoint replacement below.
+
 Do not turn a legacy plaintext NLB into this endpoint by editing its Service or
 security groups in place. Inventory the current NLB ARN, DNS consumers,
 endpoint services, and any manually added ALB before replacing the legacy
@@ -352,13 +402,12 @@ listener if recovery is required.
 
 Before cleanup, revoke the evaluation Workspace Service API key and remove the
 evaluation Model Catalog provider. The cleanup targets the configured stack,
-release, namespace, and gateway service-account names; it can be described as
-walkthrough-owned only when the exclusive-name prerequisite above was honored.
-It does not retrospectively prove ownership of a pre-existing same-named stack,
-Helm release, or gateway service account that deployment may have updated or
-overridden. Audit collisions and obtain the original owner's approval before
-cleanup. The separate load-balancer-controller cleanup performs its stronger
-ownership checks as described above.
+release, namespace, and gateway service-account names. It refuses to remove an
+unreadable, partial, unmanaged, or drifted gateway service-account/`eksctl`
+stack pair; resolve that state with its owner. Verify the independently named
+CloudFormation stack and Helm release before cleanup because their names can
+still address pre-existing resources. The separate load-balancer-controller
+cleanup performs its own ownership checks as described above.
 
 The S3 log bucket is intentionally retained when the CloudFormation stack is
 deleted. Review and remove it separately after evidence retention requirements

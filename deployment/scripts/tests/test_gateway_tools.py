@@ -180,6 +180,9 @@ class TestResponsesContract(unittest.TestCase):
 
 
 class TestPortkeyDeployment(unittest.TestCase):
+    GATEWAY_IMAGE_DIGEST = "sha256:" + ("a" * 64)
+    REDIS_IMAGE_DIGEST = "sha256:" + ("b" * 64)
+
     def portkey_environment(self):
         return {
             **os.environ,
@@ -205,6 +208,95 @@ class TestPortkeyDeployment(unittest.TestCase):
             f"arn:{partition}:acm:{region}:123456789012:certificate/"
             "11111111-2222-3333-4444-555555555555"
         )
+
+    @staticmethod
+    def gateway_role_arn():
+        return "arn:aws:iam::123456789012:role/portkey-gateway-role"
+
+    @staticmethod
+    def gateway_policy_arn():
+        return "arn:aws:iam::123456789012:policy/portkey"
+
+    @classmethod
+    def gateway_service_account_payload(cls, managed_by="eksctl"):
+        return {
+            "metadata": {
+                "name": "gateway-sa",
+                "namespace": "portkeyai",
+                "labels": {"app.kubernetes.io/managed-by": managed_by},
+                "annotations": {
+                    "eks.amazonaws.com/role-arn": cls.gateway_role_arn()
+                },
+            }
+        }
+
+    @classmethod
+    def gateway_iam_stack_payload(
+        cls,
+        *,
+        application="guidance-codex-portkey",
+        status="CREATE_COMPLETE",
+        role_arn=None,
+    ):
+        tags = [
+            {"Key": "alpha.eksctl.io/cluster-name", "Value": "codex-portkey"},
+            {
+                "Key": "alpha.eksctl.io/iamserviceaccount-name",
+                "Value": "portkeyai/gateway-sa",
+            },
+        ]
+        if application is not None:
+            tags.append({"Key": "Application", "Value": application})
+        return {
+            "Stacks": [
+                {
+                    "StackName": (
+                        "eksctl-codex-portkey-addon-iamserviceaccount-"
+                        "portkeyai-gateway-sa"
+                    ),
+                    "StackStatus": status,
+                    "Tags": tags,
+                    "Outputs": [
+                        {
+                            "OutputKey": "Role1",
+                            "OutputValue": role_arn or cls.gateway_role_arn(),
+                        }
+                    ],
+                }
+            ]
+        }
+
+    @classmethod
+    def gateway_role_payload(cls, region="us-east-1"):
+        issuer = f"oidc.eks.{region}.amazonaws.com/id/EXAMPLE"
+        return {
+            "Role": {
+                "Arn": cls.gateway_role_arn(),
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": "sts:AssumeRoleWithWebIdentity",
+                            "Principal": {
+                                "Federated": (
+                                    "arn:aws:iam::123456789012:oidc-provider/"
+                                    f"{issuer}"
+                                )
+                            },
+                            "Condition": {
+                                "StringEquals": {
+                                    f"{issuer}:aud": "sts.amazonaws.com",
+                                    f"{issuer}:sub": (
+                                        "system:serviceaccount:portkeyai:gateway-sa"
+                                    ),
+                                }
+                            },
+                        }
+                    ],
+                },
+            }
+        }
 
     @staticmethod
     def rendered_lbc_policy(
@@ -629,6 +721,7 @@ exit 0
             helm.write_text(
                 """#!/usr/bin/env bash
 printf 'helm %s\n' "$*" >>"$PORTKEY_TEST_COMMAND_LOG"
+if [[ "${1:-}" == version && "${2:-}" == --short ]]; then printf '%s\n' 'v3.21.4+gtest'; fi
 exit 0
 """,
                 encoding="utf-8",
@@ -701,15 +794,36 @@ exit 0
             fake_bin = temp / "bin"
             fake_bin.mkdir()
             command_log = temp / "commands.log"
+            service_account_file = temp / "service-account.json"
+            stack_file = temp / "gateway-iam-stack.json"
+            role_file = temp / "gateway-role.json"
+            service_account_file.write_text(
+                json.dumps(self.gateway_service_account_payload()),
+                encoding="utf-8",
+            )
+            stack_file.write_text(
+                json.dumps(self.gateway_iam_stack_payload()),
+                encoding="utf-8",
+            )
+            role_file.write_text(
+                json.dumps(self.gateway_role_payload("us-west-2")),
+                encoding="utf-8",
+            )
 
             aws = fake_bin / "aws"
             aws.write_text(
                 """#!/usr/bin/env bash
 printf 'aws %s\n' "$*" >>"$PORTKEY_TEST_COMMAND_LOG"
 case "$*" in
+  *"sts get-caller-identity"*"--query Account"*) printf '%s\n' '123456789012' ;;
   *"sts get-caller-identity"*) printf '%s\n' '{}' ;;
   *"cluster.identity.oidc.issuer"*) printf '%s\n' 'https://oidc.eks.us-west-2.amazonaws.com/id/EXAMPLE' ;;
+  *"cloudformation describe-stacks --stack-name eksctl-"*"StackName"*) printf '%s\n' 'eksctl-codex-portkey-addon-iamserviceaccount-portkeyai-gateway-sa' ;;
+  *"cloudformation describe-stacks --stack-name eksctl-"*"--output json"*) cat "$PORTKEY_TEST_GATEWAY_IAM_STACK_JSON" ;;
   *"GatewayManagedPolicyArn"*) printf '%s\n' 'arn:aws:iam::123456789012:policy/portkey' ;;
+  *"iam get-role"*) cat "$PORTKEY_TEST_GATEWAY_ROLE_JSON" ;;
+  *"iam list-attached-role-policies"*) printf '%s\n' '["arn:aws:iam::123456789012:policy/portkey"]' ;;
+  *"iam list-role-policies"*) printf '%s\n' '[]' ;;
 esac
 exit 0
 """,
@@ -729,7 +843,17 @@ exit 0
             eksctl.chmod(0o700)
 
             kubectl = fake_bin / "kubectl"
-            kubectl.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            kubectl.write_text(
+                """#!/usr/bin/env bash
+case "$*" in
+  *"get serviceaccount gateway-sa"*"--ignore-not-found -o name"*) printf '%s' 'serviceaccount/gateway-sa' ;;
+  *"get serviceaccount gateway-sa"*"role-arn"*) printf '%s' 'arn:aws:iam::123456789012:role/portkey-gateway-role' ;;
+  *"get serviceaccount gateway-sa -o json"*) cat "$PORTKEY_TEST_GATEWAY_SERVICE_ACCOUNT_JSON" ;;
+esac
+exit 0
+""",
+                encoding="utf-8",
+            )
             kubectl.chmod(0o700)
 
             environ = self.portkey_environment()
@@ -743,6 +867,11 @@ exit 0
                     "CONFIRM_AWS_WRITE": "1",
                     "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
                     "PORTKEY_TEST_COMMAND_LOG": str(command_log),
+                    "PORTKEY_TEST_GATEWAY_SERVICE_ACCOUNT_JSON": str(
+                        service_account_file
+                    ),
+                    "PORTKEY_TEST_GATEWAY_IAM_STACK_JSON": str(stack_file),
+                    "PORTKEY_TEST_GATEWAY_ROLE_JSON": str(role_file),
                 }
             )
             result = subprocess.run(
@@ -767,6 +896,220 @@ exit 0
                 "--cluster codex-portkey --region us-west-2",
                 commands,
             )
+
+    def test_portkey_gateway_service_account_deploy_is_owned_and_fail_closed(self):
+        script = SCRIPTS_DIR / "portkey-stack.sh"
+        script_text = script.read_text(encoding="utf-8")
+        self.assertNotIn("--override-existing-serviceaccounts", script_text)
+
+        with TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            fake_bin = temp / "bin"
+            fake_bin.mkdir()
+            command_log = temp / "commands.log"
+            created_marker = temp / "iam-service-account-created"
+            service_account_file = temp / "service-account.json"
+            stack_file = temp / "iam-stack.json"
+            role_file = temp / "role.json"
+
+            stack_file.write_text(
+                json.dumps(self.gateway_iam_stack_payload()),
+                encoding="utf-8",
+            )
+            role_file.write_text(
+                json.dumps(self.gateway_role_payload()),
+                encoding="utf-8",
+            )
+
+            aws = fake_bin / "aws"
+            aws.write_text(
+                r'''#!/usr/bin/env bash
+printf 'aws %s\n' "$*" >>"$PORTKEY_TEST_COMMAND_LOG"
+stack_present=false
+case "${PORTKEY_TEST_GATEWAY_IAM_STATE:-fresh}" in
+  managed|drift|stack-only) stack_present=true ;;
+  fresh) [[ -f "$PORTKEY_TEST_CREATED_MARKER" ]] && stack_present=true ;;
+esac
+case "$*" in
+  *"sts get-caller-identity"*"--query Account"*) printf '%s\n' '123456789012' ;;
+  *"sts get-caller-identity"*) printf '%s\n' '{}' ;;
+  *"cluster.identity.oidc.issuer"*) printf '%s\n' 'https://oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE' ;;
+  *"cloudformation describe-stacks --stack-name eksctl-"*"StackName"*)
+    if [[ "${PORTKEY_TEST_GATEWAY_IAM_STATE:-}" == unreadable ]]; then
+      printf '%s\n' 'AccessDenied: test lookup denied' >&2
+      exit 41
+    fi
+    if [[ "$stack_present" == true ]]; then
+      printf '%s\n' 'eksctl-codex-portkey-addon-iamserviceaccount-portkeyai-gateway-sa'
+    else
+      printf '%s\n' 'An error occurred (ValidationError): Stack does not exist' >&2
+      exit 255
+    fi
+    ;;
+  *"cloudformation describe-stacks --stack-name eksctl-"*"--output json"*) cat "$PORTKEY_TEST_GATEWAY_IAM_STACK_JSON" ;;
+  *"GatewayManagedPolicyArn"*) printf '%s\n' 'arn:aws:iam::123456789012:policy/portkey' ;;
+  *"iam get-role"*) cat "$PORTKEY_TEST_GATEWAY_ROLE_JSON" ;;
+  *"iam list-attached-role-policies"*) printf '%s\n' '["arn:aws:iam::123456789012:policy/portkey"]' ;;
+  *"iam list-role-policies"*) printf '%s\n' '[]' ;;
+  *"cloudformation validate-template"*) printf '%s\n' '{}' ;;
+  *"cloudformation deploy"*) exit 0 ;;
+esac
+exit 0
+''',
+                encoding="utf-8",
+            )
+            aws.chmod(0o700)
+
+            kubectl = fake_bin / "kubectl"
+            kubectl.write_text(
+                r'''#!/usr/bin/env bash
+printf 'kubectl %s\n' "$*" >>"$PORTKEY_TEST_COMMAND_LOG"
+service_account_present=false
+case "${PORTKEY_TEST_GATEWAY_IAM_STATE:-fresh}" in
+  managed|drift|sa-only) service_account_present=true ;;
+  fresh) [[ -f "$PORTKEY_TEST_CREATED_MARKER" ]] && service_account_present=true ;;
+  race) [[ -f "$PORTKEY_TEST_CREATED_MARKER" ]] && service_account_present=true ;;
+esac
+case "$*" in
+  *"get serviceaccount gateway-sa"*"--ignore-not-found -o name"*)
+    [[ "$service_account_present" == false ]] || printf '%s' 'serviceaccount/gateway-sa'
+    ;;
+  *"get serviceaccount gateway-sa"*"role-arn"*)
+    [[ "$service_account_present" == true ]] || exit 1
+    printf '%s' 'arn:aws:iam::123456789012:role/portkey-gateway-role'
+    ;;
+  *"get serviceaccount gateway-sa -o json"*)
+    [[ "$service_account_present" == true ]] || exit 1
+    cat "$PORTKEY_TEST_GATEWAY_SERVICE_ACCOUNT_JSON"
+    ;;
+esac
+exit 0
+''',
+                encoding="utf-8",
+            )
+            kubectl.chmod(0o700)
+
+            eksctl = fake_bin / "eksctl"
+            eksctl.write_text(
+                r'''#!/usr/bin/env bash
+if [[ "${1:-}" == version ]]; then printf '%s\n' '0.229.0'; exit 0; fi
+printf 'eksctl %s\n' "$*" >>"$PORTKEY_TEST_COMMAND_LOG"
+if [[ "$*" == *"create iamserviceaccount"* ]]; then
+  if [[ "${PORTKEY_TEST_GATEWAY_IAM_STATE:-}" == race ]]; then
+    touch "$PORTKEY_TEST_CREATED_MARKER"
+    printf '%s\n' 'eksctl silently excluded a service account that appeared after preflight'
+    exit 0
+  fi
+  touch "$PORTKEY_TEST_CREATED_MARKER"
+fi
+exit 0
+''',
+                encoding="utf-8",
+            )
+            eksctl.chmod(0o700)
+
+            base_environment = {
+                **self.portkey_environment(),
+                "CONFIRM_AWS_WRITE": "1",
+                "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+                "PORTKEY_TEST_COMMAND_LOG": str(command_log),
+                "PORTKEY_TEST_CREATED_MARKER": str(created_marker),
+                "PORTKEY_TEST_GATEWAY_SERVICE_ACCOUNT_JSON": str(
+                    service_account_file
+                ),
+                "PORTKEY_TEST_GATEWAY_IAM_STACK_JSON": str(stack_file),
+                "PORTKEY_TEST_GATEWAY_ROLE_JSON": str(role_file),
+            }
+
+            def run_case(state, service_account=None):
+                command_log.write_text("", encoding="utf-8")
+                created_marker.unlink(missing_ok=True)
+                service_account_file.write_text(
+                    json.dumps(
+                        service_account or self.gateway_service_account_payload()
+                    ),
+                    encoding="utf-8",
+                )
+                result = subprocess.run(
+                    ["bash", str(script), "deploy"],
+                    cwd=REPO_ROOT,
+                    env={
+                        **base_environment,
+                        "PORTKEY_TEST_GATEWAY_IAM_STATE": state,
+                    },
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                return result, command_log.read_text(encoding="utf-8")
+
+            fresh, fresh_commands = run_case("fresh")
+            self.assertEqual(fresh.returncode, 0, fresh.stderr)
+            self.assertIn("cloudformation deploy", fresh_commands)
+            self.assertIn("eksctl create iamserviceaccount", fresh_commands)
+            self.assertIn(
+                "--tags Application=guidance-codex-portkey",
+                fresh_commands,
+            )
+            self.assertNotIn("--override-existing-serviceaccounts", fresh_commands)
+
+            managed, managed_commands = run_case("managed")
+            self.assertEqual(managed.returncode, 0, managed.stderr)
+            self.assertIn("cloudformation deploy", managed_commands)
+            self.assertNotIn("eksctl create iamserviceaccount", managed_commands)
+            self.assertIn("Reusing the verified", managed.stdout)
+
+            rejected_states = (
+                (
+                    "sa-only",
+                    "already exists without its expected eksctl IAM stack",
+                ),
+                (
+                    "stack-only",
+                    "exists without its expected Kubernetes service account",
+                ),
+                (
+                    "unreadable",
+                    "could not determine whether the gateway IAM service-account stack exists",
+                ),
+            )
+            for state, expected_error in rejected_states:
+                with self.subTest(state=state):
+                    rejected, commands = run_case(state)
+                    self.assertNotEqual(rejected.returncode, 0)
+                    self.assertIn(expected_error, rejected.stderr)
+                    self.assertNotIn("cloudformation deploy", commands)
+                    self.assertNotIn(
+                        "eksctl utils associate-iam-oidc-provider", commands
+                    )
+                    self.assertNotIn("eksctl create iamserviceaccount", commands)
+
+            drifted, drifted_commands = run_case(
+                "drift",
+                self.gateway_service_account_payload(managed_by="platform-team"),
+            )
+            self.assertNotEqual(drifted.returncode, 0)
+            self.assertIn(
+                "gateway IAM service-account ownership validation failed",
+                drifted.stderr,
+            )
+            self.assertNotIn("cloudformation deploy", drifted_commands)
+            self.assertNotIn("eksctl create iamserviceaccount", drifted_commands)
+
+            raced, race_commands = run_case("race")
+            self.assertNotEqual(raced.returncode, 0)
+            self.assertIn(
+                "exists without its expected eksctl IAM stack",
+                raced.stderr,
+            )
+            self.assertIn("eksctl create iamserviceaccount", race_commands)
+            self.assertNotIn("--override-existing-serviceaccounts", race_commands)
+
+            for result in (fresh, managed, drifted, raced):
+                self.assertNotIn(
+                    "do-not-print-this-secret",
+                    result.stdout + result.stderr,
+                )
 
     def test_portkey_strict_validation_probes_every_allowed_model(self):
         script = SCRIPTS_DIR / "portkey-stack.sh"
@@ -954,6 +1297,168 @@ exec "$PORTKEY_TEST_REAL_PYTHON" "$@"
         self.assertIn("__PORTKEY_CLIENT_AUTH__", values)
         self.assertIn("__PORTKEY_DOCKER_PASSWORD__", values)
         self.assertNotIn("api.portkey.ai/v1", values)
+
+    def test_portkey_image_inputs_require_digest_pins_and_reject_aliases_safely(self):
+        script = SCRIPTS_DIR / "portkey-stack.sh"
+        shell_command = (
+            'set -- help; source "$PORTKEY_TEST_SCRIPT" >/dev/null; '
+            "validate_helm_secrets"
+        )
+        canary = "do-not-print-image-input-canary"
+        environment = {
+            **os.environ,
+            "PORTKEY_ENV_FILE": str(REPO_ROOT / "does-not-exist"),
+            "PORTKEY_TEST_SCRIPT": str(script),
+            "PORTKEY_DOCKER_USERNAME": "registry-user",
+            "PORTKEY_DOCKER_PASSWORD": "registry-password",
+            "PORTKEY_CLIENT_AUTH": "client-auth",
+            "PORTKEY_ORGANIZATION_ID": "organization-id",
+            "PORTKEY_HELM_CHART_VERSION": "1.7.7",
+            "PORTKEY_GATEWAY_IMAGE_TAG": "2026.08.03",
+            "PORTKEY_GATEWAY_IMAGE_DIGEST": self.GATEWAY_IMAGE_DIGEST,
+            "PORTKEY_REDIS_IMAGE_TAG": "7.2.10-alpine",
+            "PORTKEY_REDIS_IMAGE_DIGEST": self.REDIS_IMAGE_DIGEST,
+        }
+
+        accepted = subprocess.run(
+            ["bash", "-c", shell_command],
+            cwd=REPO_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+        for digest_name in (
+            "PORTKEY_GATEWAY_IMAGE_DIGEST",
+            "PORTKEY_REDIS_IMAGE_DIGEST",
+        ):
+            with self.subTest(missing=digest_name):
+                missing_environment = dict(environment)
+                missing_environment.pop(digest_name)
+                rejected = subprocess.run(
+                    ["bash", "-c", shell_command],
+                    cwd=REPO_ROOT,
+                    env=missing_environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn(digest_name, rejected.stderr)
+
+        malformed_digests = (
+            "sha256:" + ("a" * 63),
+            "sha512:" + ("a" * 64),
+            "sha256:" + ("G" * 64),
+            f"sha256:{canary}",
+        )
+        for digest_name in (
+            "PORTKEY_GATEWAY_IMAGE_DIGEST",
+            "PORTKEY_REDIS_IMAGE_DIGEST",
+        ):
+            for malformed in malformed_digests:
+                with self.subTest(variable=digest_name, malformed=malformed[:7]):
+                    rejected = subprocess.run(
+                        ["bash", "-c", shell_command],
+                        cwd=REPO_ROOT,
+                        env={**environment, digest_name: malformed},
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertNotEqual(rejected.returncode, 0)
+                    self.assertIn(digest_name, rejected.stderr)
+                    self.assertNotIn(canary, rejected.stdout + rejected.stderr)
+
+        for alias in ("latest", "LATEST", "edge", "main-latest"):
+            with self.subTest(alias=alias):
+                rejected = subprocess.run(
+                    ["bash", "-c", shell_command],
+                    cwd=REPO_ROOT,
+                    env={**environment, "PORTKEY_GATEWAY_IMAGE_TAG": alias},
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn("PORTKEY_GATEWAY_IMAGE_TAG", rejected.stderr)
+                self.assertNotIn(canary, rejected.stdout + rejected.stderr)
+
+    def test_portkey_helm_plan_accepts_helm3_and_rejects_helm4_before_render(self):
+        script = SCRIPTS_DIR / "portkey-stack.sh"
+        with TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            fake_bin = temp / "bin"
+            fake_bin.mkdir()
+            command_log = temp / "commands.log"
+            render_marker = temp / "rendered"
+
+            helm = fake_bin / "helm"
+            helm.write_text(
+                r'''#!/usr/bin/env bash
+printf 'helm %s\n' "$*" >>"$PORTKEY_TEST_COMMAND_LOG"
+if [[ "${1:-}" == version && "${2:-}" == --short ]]; then
+  printf '%s\n' "$PORTKEY_TEST_HELM_VERSION"
+fi
+exit 0
+''',
+                encoding="utf-8",
+            )
+            helm.chmod(0o700)
+
+            shell_command = r'''
+set -- help
+source "$PORTKEY_TEST_SCRIPT" >/dev/null
+stack_exists() { return 0; }
+render_values() { : >"$1"; touch "$PORTKEY_TEST_RENDER_MARKER"; }
+helm_plan
+'''
+            environment = {
+                **os.environ,
+                "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+                "PORTKEY_ENV_FILE": str(REPO_ROOT / "does-not-exist"),
+                "PORTKEY_TEST_SCRIPT": str(script),
+                "PORTKEY_TEST_COMMAND_LOG": str(command_log),
+                "PORTKEY_TEST_RENDER_MARKER": str(render_marker),
+            }
+
+            command_log.write_text("", encoding="utf-8")
+            helm3 = subprocess.run(
+                ["bash", "-c", shell_command],
+                cwd=REPO_ROOT,
+                env={**environment, "PORTKEY_TEST_HELM_VERSION": "v3.21.4+gtest"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(helm3.returncode, 0, helm3.stderr)
+            self.assertTrue(render_marker.exists())
+            helm3_commands = command_log.read_text(encoding="utf-8")
+            self.assertIn("helm template", helm3_commands)
+            self.assertIn("--post-renderer", helm3_commands)
+
+            command_log.write_text("", encoding="utf-8")
+            render_marker.unlink()
+            helm4 = subprocess.run(
+                ["bash", "-c", shell_command],
+                cwd=REPO_ROOT,
+                env={**environment, "PORTKEY_TEST_HELM_VERSION": "v4.2.0+gtest"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(helm4.returncode, 0)
+            self.assertIn("Helm 3 is required", helm4.stderr)
+            self.assertIn("Helm 4", helm4.stderr)
+            self.assertFalse(render_marker.exists())
+            helm4_commands = command_log.read_text(encoding="utf-8")
+            self.assertEqual(
+                helm4_commands.splitlines(),
+                ["helm version --short"],
+                helm4_commands,
+            )
 
     def test_portkey_exit_traps_do_not_reference_expired_locals(self):
         script = (SCRIPTS_DIR / "portkey-stack.sh").read_text(encoding="utf-8")
@@ -1165,6 +1670,11 @@ exec "$PORTKEY_TEST_REAL_PYTHON" "$@"
         self.assertNotIn("loadBalancerSourceRanges", values)
         self.assertRegex(values, r"(?m)^ingress:\n  enabled: false$")
         self.assertRegex(values, r"(?m)^mcpService:\n  enabled: false$")
+        self.assertRegex(
+            values,
+            r"(?m)^redis:\n  serviceType: ClusterIP$",
+        )
+        self.assertNotIn("serviceType: NodePort", values)
 
     def test_portkey_local_port_forward_targets_service_tls_port(self):
         script = (SCRIPTS_DIR / "portkey-stack.sh").read_text(encoding="utf-8")
@@ -1435,10 +1945,332 @@ exit 0
         self.assertIsNotNone(helm_deploy)
         body = helm_deploy.group(1)
         preflight_index = body.index("require_safe_nlb_service_upgrade pre")
+        nodeport_index = body.index("remove_gateway_nodeport_allocation")
         helm_index = body.index("helm upgrade --install")
         postflight_index = body.index("require_safe_nlb_service_upgrade post")
-        self.assertLess(preflight_index, helm_index)
+        surface_index = body.index("validate_portkey_service_surface")
+        self.assertLess(preflight_index, nodeport_index)
+        self.assertLess(nodeport_index, helm_index)
         self.assertLess(helm_index, postflight_index)
+        self.assertLess(postflight_index, surface_index)
+        self.assertIn(
+            'PORTKEY_POST_RENDER_SERVICE_NAME="$PORTKEY_GATEWAY_SERVICE"',
+            body,
+        )
+        self.assertIn('--post-renderer "$PORTKEY_POST_RENDERER"', body)
+
+        helm_plan = re.search(
+            r"(?ms)^helm_plan\(\) \{(.*?)^\}",
+            script_text,
+        )
+        self.assertIsNotNone(helm_plan)
+        self.assertIn(
+            'PORTKEY_POST_RENDER_SERVICE_NAME="$PORTKEY_GATEWAY_SERVICE"',
+            helm_plan.group(1),
+        )
+        self.assertIn(
+            '--post-renderer "$PORTKEY_POST_RENDERER"',
+            helm_plan.group(1),
+        )
+
+    def test_portkey_gateway_nodeport_migration_is_scoped_and_idempotent(self):
+        script = SCRIPTS_DIR / "portkey-stack.sh"
+        shell_command = r'''
+set -- help
+source "$PORTKEY_TEST_SCRIPT" >/dev/null
+require_safe_nlb_service_upgrade() {
+  printf 'guard %s\n' "${1:-pre}" >>"$PORTKEY_TEST_COMMAND_LOG"
+}
+kubectl() {
+  printf 'kubectl %s\n' "$*" >>"$PORTKEY_TEST_COMMAND_LOG"
+  case "$*" in
+    *"--ignore-not-found -o name"*)
+      [[ "${PORTKEY_TEST_SERVICE_ABSENT:-}" == 1 ]] || printf '%s' 'service/portkey-ai-gateway'
+      ;;
+    *"get service portkey-ai-gateway -o json"*) printf '%s' "$PORTKEY_TEST_SERVICE_JSON" ;;
+    *"patch service portkey-ai-gateway"*)
+      [[ "${PORTKEY_TEST_PATCH_FAILURE:-}" != 1 ]] || return 42
+      ;;
+  esac
+}
+remove_gateway_nodeport_allocation
+'''
+
+        def service_payload(*, allocate=None, node_port=None, extra_port=False):
+            port = {
+                "name": "gateway",
+                "port": 443,
+                "protocol": "TCP",
+                "targetPort": "gateway",
+            }
+            if node_port is not None:
+                port["nodePort"] = node_port
+            ports = [port]
+            if extra_port:
+                ports.append(
+                    {
+                        "name": "unexpected",
+                        "port": 8443,
+                        "protocol": "TCP",
+                        "targetPort": "gateway",
+                    }
+                )
+            spec = {"type": "LoadBalancer", "ports": ports}
+            if allocate is not None:
+                spec["allocateLoadBalancerNodePorts"] = allocate
+            return json.dumps({"spec": spec}, separators=(",", ":"))
+
+        with TemporaryDirectory() as temp_dir:
+            command_log = Path(temp_dir) / "commands.log"
+            environment = {
+                **os.environ,
+                "PORTKEY_ENV_FILE": str(REPO_ROOT / "does-not-exist"),
+                "PORTKEY_TEST_SCRIPT": str(script),
+                "PORTKEY_TEST_COMMAND_LOG": str(command_log),
+            }
+
+            command_log.write_text("", encoding="utf-8")
+            migrated = subprocess.run(
+                ["bash", "-c", shell_command],
+                cwd=REPO_ROOT,
+                env={
+                    **environment,
+                    "PORTKEY_TEST_SERVICE_JSON": service_payload(node_port=32443),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(migrated.returncode, 0, migrated.stderr)
+            migration_commands = command_log.read_text(encoding="utf-8")
+            expected_patch = (
+                '[{"op":"add","path":"/spec/allocateLoadBalancerNodePorts",'
+                '"value":false},{"op":"remove","path":'
+                '"/spec/ports/0/nodePort"}]'
+            )
+            self.assertIn(expected_patch, migration_commands)
+            self.assertLess(
+                migration_commands.index("guard pre"),
+                migration_commands.index("patch service portkey-ai-gateway"),
+            )
+
+            command_log.write_text("", encoding="utf-8")
+            already_clean = subprocess.run(
+                ["bash", "-c", shell_command],
+                cwd=REPO_ROOT,
+                env={
+                    **environment,
+                    "PORTKEY_TEST_SERVICE_JSON": service_payload(allocate=False),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(already_clean.returncode, 0, already_clean.stderr)
+            clean_commands = command_log.read_text(encoding="utf-8")
+            self.assertIn("guard pre", clean_commands)
+            self.assertNotIn("patch service", clean_commands)
+
+            command_log.write_text("", encoding="utf-8")
+            malformed = subprocess.run(
+                ["bash", "-c", shell_command],
+                cwd=REPO_ROOT,
+                env={
+                    **environment,
+                    "PORTKEY_TEST_SERVICE_JSON": service_payload(extra_port=True),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(malformed.returncode, 0)
+            self.assertIn("could not construct", malformed.stderr)
+            self.assertNotIn(
+                "patch service", command_log.read_text(encoding="utf-8")
+            )
+
+            command_log.write_text("", encoding="utf-8")
+            patch_failure = subprocess.run(
+                ["bash", "-c", shell_command],
+                cwd=REPO_ROOT,
+                env={
+                    **environment,
+                    "PORTKEY_TEST_SERVICE_JSON": service_payload(node_port=32443),
+                    "PORTKEY_TEST_PATCH_FAILURE": "1",
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(patch_failure.returncode, 0)
+            self.assertIn("could not atomically disable", patch_failure.stderr)
+
+    def test_portkey_service_surface_postcheck_rejects_nodeport_paths(self):
+        script = SCRIPTS_DIR / "portkey-stack.sh"
+        shell_command = r'''
+set -- help
+source "$PORTKEY_TEST_SCRIPT" >/dev/null
+kubectl() {
+  [[ "$*" == *"get services -o json"* ]] || return 1
+  printf '%s' "$PORTKEY_TEST_SERVICES_JSON"
+}
+validate_portkey_service_surface
+'''
+
+        def service(name, service_type, *, allocate=None, node_port=None):
+            port = {"port": 443 if name != "redis" else 6379}
+            if node_port is not None:
+                port["nodePort"] = node_port
+            spec = {"type": service_type, "ports": [port]}
+            if allocate is not None:
+                spec["allocateLoadBalancerNodePorts"] = allocate
+            return {
+                "apiVersion": "v1",
+                "kind": "Service",
+                "metadata": {"name": name},
+                "spec": spec,
+            }
+
+        gateway = service(
+            "portkey-ai-gateway",
+            "LoadBalancer",
+            allocate=False,
+        )
+        redis = service("redis", "ClusterIP")
+        environment = {
+            **os.environ,
+            "PORTKEY_ENV_FILE": str(REPO_ROOT / "does-not-exist"),
+            "PORTKEY_TEST_SCRIPT": str(script),
+        }
+
+        accepted = subprocess.run(
+            ["bash", "-c", shell_command],
+            cwd=REPO_ROOT,
+            env={
+                **environment,
+                "PORTKEY_TEST_SERVICES_JSON": json.dumps(
+                    {"items": [gateway, redis]}
+                ),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+        rejected_surfaces = {
+            "gateway allocation defaults on": [
+                service("portkey-ai-gateway", "LoadBalancer"),
+                redis,
+            ],
+            "gateway nodeport": [
+                service(
+                    "portkey-ai-gateway",
+                    "LoadBalancer",
+                    allocate=False,
+                    node_port=32443,
+                ),
+                redis,
+            ],
+            "redis nodeport service": [
+                gateway,
+                service("redis", "NodePort", node_port=30379),
+            ],
+            "redis allocated nodeport": [
+                gateway,
+                service("redis", "ClusterIP", node_port=30379),
+            ],
+            "second load balancer": [
+                gateway,
+                redis,
+                service("unexpected", "LoadBalancer", allocate=False),
+            ],
+        }
+        for description, services in rejected_surfaces.items():
+            with self.subTest(description=description):
+                rejected = subprocess.run(
+                    ["bash", "-c", shell_command],
+                    cwd=REPO_ROOT,
+                    env={
+                        **environment,
+                        "PORTKEY_TEST_SERVICES_JSON": json.dumps(
+                            {"items": services}
+                        ),
+                    },
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn("unexpected Service exposure", rejected.stderr)
+
+    def test_portkey_post_renderer_targets_one_gateway_without_echoing_input(self):
+        post_renderer = (
+            REPO_ROOT / "deployment" / "portkey" / "portkey-post-renderer.sh"
+        )
+        environment = {
+            **os.environ,
+            "PORTKEY_POST_RENDER_SERVICE_NAME": "portkey-ai-gateway",
+        }
+        gateway = """apiVersion: v1
+kind: Service
+metadata:
+  name: portkey-ai-gateway
+  labels:
+    app.kubernetes.io/name: gateway
+spec:
+  type: LoadBalancer
+  ports:
+    - name: gateway
+      port: 443
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  type: ClusterIP
+  ports:
+    - port: 6379
+"""
+        rendered = subprocess.run(
+            ["bash", str(post_renderer)],
+            cwd=REPO_ROOT,
+            env=environment,
+            input=gateway,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(rendered.returncode, 0, rendered.stderr)
+        self.assertIn("allocateLoadBalancerNodePorts: false", rendered.stdout)
+        self.assertEqual(rendered.stdout.count("type: LoadBalancer"), 1)
+        self.assertEqual(rendered.stdout.count("type: ClusterIP"), 1)
+
+        canary = "manifest-secret-canary"
+        rejected_manifests = {
+            "missing": gateway.replace("portkey-ai-gateway", "another-service"),
+            "wrong type": gateway.replace("type: LoadBalancer", "type: ClusterIP", 1),
+            "duplicate": gateway + "---\n" + gateway.split("---\n", 1)[0],
+            "malformed": f"apiVersion: v1\nkind: Service\nmetadata: [{canary}\n",
+        }
+        for description, manifest in rejected_manifests.items():
+            with self.subTest(description=description):
+                rejected = subprocess.run(
+                    ["bash", str(post_renderer)],
+                    cwd=REPO_ROOT,
+                    env=environment,
+                    input=manifest,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn(
+                    "exactly one LoadBalancer Service named portkey-ai-gateway",
+                    rejected.stderr,
+                )
+                self.assertNotIn(canary, rejected.stdout + rejected.stderr)
 
     def test_portkey_gateway_helm_failure_warns_release_may_have_changed(self):
         script = SCRIPTS_DIR / "portkey-stack.sh"
@@ -1451,6 +2283,8 @@ require_command() { :; }
 kube_context() { :; }
 require_load_balancer_controller() { :; }
 require_safe_nlb_service_upgrade() { :; }
+remove_gateway_nodeport_allocation() { :; }
+validate_portkey_service_surface() { :; }
 render_values() { : >"$1"; }
 helm() { return 42; }
 helm_deploy
@@ -1528,6 +2362,68 @@ helm_deploy
             "require_safe_nlb_service_upgrade",
             function_body("helm_deploy"),
         )
+
+    def test_portkey_lbc_service_account_uses_real_eksctl_ownership_label(self):
+        script = SCRIPTS_DIR / "portkey-stack.sh"
+        shell_command = r'''
+set -- help
+source "$PORTKEY_TEST_SCRIPT" >/dev/null
+kubectl() {
+  case "$*" in
+    *"managed-by"*) printf '%s' "$PORTKEY_TEST_MANAGED_BY" ;;
+    *"role-arn"*) printf '%s' 'arn:aws:iam::123456789012:role/lbc' ;;
+  esac
+}
+aws_cli() { printf '%s\n' "$PORTKEY_TEST_APPLICATION_TAG"; }
+load_balancer_controller_service_account_is_managed
+'''
+        environment = {
+            **os.environ,
+            "PORTKEY_ENV_FILE": str(REPO_ROOT / "does-not-exist"),
+            "PORTKEY_TEST_SCRIPT": str(script),
+            "PORTKEY_TEST_APPLICATION_TAG": "guidance-codex-portkey",
+        }
+
+        managed = subprocess.run(
+            ["bash", "-c", shell_command],
+            cwd=REPO_ROOT,
+            env={**environment, "PORTKEY_TEST_MANAGED_BY": "eksctl"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(managed.returncode, 0, managed.stderr)
+
+        for unrelated_label in ("guidance-codex", "platform-team", ""):
+            with self.subTest(managed_by=unrelated_label):
+                unmanaged = subprocess.run(
+                    ["bash", "-c", shell_command],
+                    cwd=REPO_ROOT,
+                    env={
+                        **environment,
+                        "PORTKEY_TEST_MANAGED_BY": unrelated_label,
+                    },
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(unmanaged.returncode, 0)
+
+        for application_tag in ("", "another-application"):
+            with self.subTest(application_tag=application_tag):
+                unowned_stack = subprocess.run(
+                    ["bash", "-c", shell_command],
+                    cwd=REPO_ROOT,
+                    env={
+                        **environment,
+                        "PORTKEY_TEST_MANAGED_BY": "eksctl",
+                        "PORTKEY_TEST_APPLICATION_TAG": application_tag,
+                    },
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(unowned_stack.returncode, 0)
 
     def test_portkey_lbc_policy_is_checked_in_and_region_vpc_tag_scoped(self):
         policy_path = (
@@ -1638,7 +2534,13 @@ exec "$PORTKEY_TEST_REAL_PYTHON" "$@"
             python.chmod(0o700)
 
             helm = fake_bin / "helm"
-            helm.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            helm.write_text(
+                "#!/usr/bin/env bash\n"
+                "if [[ \"${1:-}\" == version && \"${2:-}\" == --short ]]; "
+                "then printf '%s\\n' 'v3.21.4+gtest'; fi\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
             helm.chmod(0o700)
 
             environ = self.portkey_environment()
@@ -1743,6 +2645,7 @@ exit 0
             helm.write_text(
                 """#!/usr/bin/env bash
 printf 'helm %s\n' "$*" >>"$PORTKEY_TEST_COMMAND_LOG"
+if [[ "${1:-}" == version && "${2:-}" == --short ]]; then printf '%s\n' 'v3.21.4+gtest'; fi
 exit 0
 """,
                 encoding="utf-8",
@@ -2084,6 +2987,7 @@ exit 0
             helm.write_text(
                 """#!/usr/bin/env bash
 printf 'helm %s\n' "$*" >>"$PORTKEY_TEST_COMMAND_LOG"
+if [[ "${1:-}" == version && "${2:-}" == --short ]]; then printf '%s\n' 'v3.21.4+gtest'; exit 0; fi
 if [[ "$*" == *"upgrade --install aws-load-balancer-controller"* ]]; then
   : >"$PORTKEY_TEST_HELM_MARKER"
 fi
@@ -2224,6 +3128,7 @@ case "$*" in
   *"acm describe-certificate"*) printf '%s\n' '{"Status":"ISSUED","DomainName":"portkey.internal.example","SubjectAlternativeNames":["portkey.internal.example"]}' ;;
   *"ec2 describe-managed-prefix-lists"*) printf '%s\n' '{"PrefixLists":[{"PrefixListId":"pl-0123456789abcdef0","OwnerId":"123456789012","AddressFamily":"IPv4","State":"create-complete","MaxEntries":20}]}' ;;
   *"ec2 get-managed-prefix-list-entries"*) printf '%s\n' '{"Entries":[{"Cidr":"10.0.0.0/8"}]}' ;;
+  *"cloudformation describe-stacks"*"Application"*) printf '%s\n' 'guidance-codex-portkey' ;;
   *"cloudformation describe-stacks"*) printf '%s\n' '{"Stacks":[{"StackName":"eksctl-codex-portkey-addon-iamserviceaccount-kube-system-aws-load-balancer-controller","StackStatus":"UPDATE_COMPLETE","Tags":[{"Key":"alpha.eksctl.io/cluster-name","Value":"codex-portkey"},{"Key":"alpha.eksctl.io/iamserviceaccount-name","Value":"kube-system/aws-load-balancer-controller"},{"Key":"Application","Value":"guidance-codex-portkey"}],"Outputs":[{"OutputKey":"Role1","OutputValue":"arn:aws:iam::123456789012:role/lbc"}]}]}' ;;
   *"cloudformation get-template"*) cat "$PORTKEY_TEST_TEMPLATE_MARKER" ;;
   *"cloudformation describe-stack-resource"*) printf '%s\n' 'lbc-policy' ;;
@@ -2295,7 +3200,7 @@ case "$*" in
     ;;
   *"get deployment aws-load-balancer-controller"*) printf '%s' 'deployment.apps/aws-load-balancer-controller' ;;
   *"get serviceaccount aws-load-balancer-controller"*"role-arn"*) printf '%s' 'arn:aws:iam::123456789012:role/lbc' ;;
-  *"get serviceaccount aws-load-balancer-controller"*"managed-by"*) printf '%s' "${PORTKEY_TEST_MANAGED_BY:-guidance-codex}" ;;
+  *"get serviceaccount aws-load-balancer-controller"*"managed-by"*) printf '%s' "${PORTKEY_TEST_MANAGED_BY:-eksctl}" ;;
   *"get serviceaccount aws-load-balancer-controller"*) printf '%s' 'serviceaccount/aws-load-balancer-controller' ;;
   *"get service portkey-ai-gateway"*"--ignore-not-found -o name"*)
     if [[ "${PORTKEY_TEST_LEGACY_GATEWAY:-}" == 1 || "${PORTKEY_TEST_CURRENT_TLS_GATEWAY:-}" == 1 ]]; then
@@ -2358,6 +3263,7 @@ exit 0
             helm.write_text(
                 """#!/usr/bin/env bash
 printf 'helm %s\n' "$*" >>"$PORTKEY_TEST_COMMAND_LOG"
+if [[ "${1:-}" == version && "${2:-}" == --short ]]; then printf '%s\n' 'v3.21.4+gtest'; exit 0; fi
 if [[ "$*" == *"upgrade --install aws-load-balancer-controller"* ]]; then
   : >"$PORTKEY_TEST_HELM_MARKER"
 fi
@@ -2857,6 +3763,7 @@ case "$*" in
     fi
     printf '%s\n' 'eksctl-codex-portkey-addon-iamserviceaccount-kube-system-aws-load-balancer-controller'
     ;;
+  *"cloudformation describe-stacks"*"Application"*) printf '%s\n' 'guidance-codex-portkey' ;;
   *"cloudformation describe-stacks"*) printf '%s\n' '{"Stacks":[{"StackName":"eksctl-codex-portkey-addon-iamserviceaccount-kube-system-aws-load-balancer-controller","StackStatus":"UPDATE_COMPLETE","Tags":[{"Key":"alpha.eksctl.io/cluster-name","Value":"codex-portkey"},{"Key":"alpha.eksctl.io/iamserviceaccount-name","Value":"kube-system/aws-load-balancer-controller"},{"Key":"Application","Value":"guidance-codex-portkey"}],"Outputs":[{"OutputKey":"Role1","OutputValue":"arn:aws:iam::123456789012:role/lbc"}]}]}' ;;
   *"cloudformation get-template"*) cat "$PORTKEY_TEST_TEMPLATE_MARKER" ;;
   *"cloudformation describe-stack-resource"*) printf '%s\n' 'lbc-policy' ;;
@@ -2894,7 +3801,7 @@ case "$*" in
   *"release-name"*) [[ "${PORTKEY_TEST_RELEASE_ABSENT:-}" == 1 ]] || printf '%s' 'aws-load-balancer-controller' ;;
   *"get deployment aws-load-balancer-controller -o json"*) printf '%s' '{"metadata":{"labels":{"app.kubernetes.io/version":"v3.4.2"}},"spec":{"template":{"spec":{"serviceAccountName":"aws-load-balancer-controller","containers":[{"name":"aws-load-balancer-controller","image":"public.ecr.aws/eks/aws-load-balancer-controller:v3.4.2","args":["--cluster-name=codex-portkey","--aws-region=us-east-1","--aws-vpc-id=vpc-0123456789abcdef0","--watch-namespace=portkeyai","--feature-gates=ListenerRulesTagging=true","--enable-shield=false","--enable-waf=false","--enable-wafv2=false"]}]}}}}' ;;
   *"get deployment aws-load-balancer-controller"*) [[ "${PORTKEY_TEST_DEPLOYMENT_ABSENT:-}" == 1 ]] || printf '%s' 'deployment.apps/aws-load-balancer-controller' ;;
-  *"get serviceaccount aws-load-balancer-controller"*"managed-by"*) printf '%s' 'guidance-codex' ;;
+  *"get serviceaccount aws-load-balancer-controller"*"managed-by"*) printf '%s' 'eksctl' ;;
   *"get serviceaccount aws-load-balancer-controller"*"role-arn"*) printf '%s' 'arn:aws:iam::123456789012:role/lbc' ;;
   *"get serviceaccount aws-load-balancer-controller"*) [[ "${PORTKEY_TEST_SA_ABSENT:-}" == 1 ]] || printf '%s' 'serviceaccount/aws-load-balancer-controller'; exit 0 ;;
   *"get crd targetgroupbindings.elbv2.k8s.aws"*) [[ "${PORTKEY_TEST_CRD_UNREADABLE:-}" == 1 ]] && exit 1; exit 0 ;;
@@ -2919,6 +3826,7 @@ exit 0
             helm.write_text(
                 """#!/usr/bin/env bash
 printf 'helm %s\n' "$*" >>"$PORTKEY_TEST_COMMAND_LOG"
+if [[ "${1:-}" == version && "${2:-}" == --short ]]; then printf '%s\n' 'v3.21.4+gtest'; exit 0; fi
 if [[ "${1:-}" == status && "${PORTKEY_TEST_RELEASE_ABSENT:-}" == 1 ]]; then
   exit 1
 fi
@@ -3101,16 +4009,38 @@ exit 0
             values_path_marker = temp / "values-path"
             values_mode_marker = temp / "values-mode"
             rendered_values_marker = temp / "rendered-values.yaml"
+            service_account_file = temp / "service-account.json"
+            stack_file = temp / "gateway-iam-stack.json"
+            role_file = temp / "gateway-role.json"
+            service_account_file.write_text(
+                json.dumps(self.gateway_service_account_payload()),
+                encoding="utf-8",
+            )
+            stack_file.write_text(
+                json.dumps(self.gateway_iam_stack_payload()),
+                encoding="utf-8",
+            )
+            role_file.write_text(
+                json.dumps(self.gateway_role_payload("us-west-2")),
+                encoding="utf-8",
+            )
 
             aws = fake_bin / "aws"
             aws.write_text(
                 """#!/usr/bin/env bash
 case "$*" in
   *"sts get-caller-identity"*"--query Account"*) printf '%s\\n' '123456789012' ;;
+  *"cluster.identity.oidc.issuer"*) printf '%s\\n' 'https://oidc.eks.us-west-2.amazonaws.com/id/EXAMPLE' ;;
   *"acm describe-certificate"*) printf '%s\\n' '{"Status":"ISSUED","DomainName":"portkey.internal.example","SubjectAlternativeNames":["portkey.internal.example"]}' ;;
   *"ec2 describe-managed-prefix-lists"*) printf '%s\\n' '{"PrefixLists":[{"PrefixListId":"pl-0123456789abcdef0","OwnerId":"123456789012","AddressFamily":"IPv4","State":"create-complete","MaxEntries":20}]}' ;;
   *"ec2 get-managed-prefix-list-entries"*) printf '%s\\n' '{"Entries":[{"Cidr":"10.0.0.0/8"}]}' ;;
+  *"cloudformation describe-stacks --stack-name eksctl-"*"StackName"*) printf '%s\\n' 'eksctl-codex-portkey-addon-iamserviceaccount-portkeyai-gateway-sa' ;;
+  *"cloudformation describe-stacks --stack-name eksctl-"*"--output json"*) cat "$PORTKEY_TEST_GATEWAY_IAM_STACK_JSON" ;;
+  *"GatewayManagedPolicyArn"*) printf '%s\\n' 'arn:aws:iam::123456789012:policy/portkey' ;;
   *GatewayLogBucketName*) printf '%s\\n' 'portkey-log-bucket' ;;
+  *"iam get-role"*) cat "$PORTKEY_TEST_GATEWAY_ROLE_JSON" ;;
+  *"iam list-attached-role-policies"*) printf '%s\\n' '["arn:aws:iam::123456789012:policy/portkey"]' ;;
+  *"iam list-role-policies"*) printf '%s\\n' '[]' ;;
 esac
 exit 0
 """,
@@ -3122,7 +4052,9 @@ exit 0
             kubectl.write_text(
                 """#!/usr/bin/env bash
 case "$*" in
-  *serviceaccount*) printf '%s' 'arn:aws:iam::123456789012:role/portkey' ;;
+  *"get serviceaccount gateway-sa"*"--ignore-not-found -o name"*) printf '%s' 'serviceaccount/gateway-sa' ;;
+  *"get serviceaccount gateway-sa"*"role-arn"*) printf '%s' 'arn:aws:iam::123456789012:role/portkey-gateway-role' ;;
+  *"get serviceaccount gateway-sa -o json"*) cat "$PORTKEY_TEST_GATEWAY_SERVICE_ACCOUNT_JSON" ;;
 esac
 exit 0
 """,
@@ -3133,6 +4065,7 @@ exit 0
             helm = fake_bin / "helm"
             helm.write_text(
                 """#!/usr/bin/env bash
+if [[ "${1:-}" == version && "${2:-}" == --short ]]; then printf '%s\n' 'v3.21.4+gtest'; exit 0; fi
 for name in PORTKEY_DOCKER_USERNAME PORTKEY_DOCKER_PASSWORD PORTKEY_CLIENT_AUTH PORTKEY_ORGANIZATION_ID PORTKEY_API_KEY; do
   [[ -z "${!name+x}" ]] || exit 99
 done
@@ -3172,11 +4105,18 @@ exit 0
                 "PORTKEY_ENV_FILE": str(temp / "does-not-exist"),
                 "PORTKEY_HELM_CHART_VERSION": "1.7.7",
                 "PORTKEY_GATEWAY_IMAGE_TAG": "2026.08.03",
+                "PORTKEY_GATEWAY_IMAGE_DIGEST": self.GATEWAY_IMAGE_DIGEST,
                 "PORTKEY_REDIS_IMAGE_TAG": "7.2.10-alpine",
+                "PORTKEY_REDIS_IMAGE_DIGEST": self.REDIS_IMAGE_DIGEST,
                 "PORTKEY_TEST_VALUES_PATH": str(values_path_marker),
                 "PORTKEY_TEST_VALUES_MODE": str(values_mode_marker),
                 "PORTKEY_TEST_RENDERED_VALUES": str(rendered_values_marker),
                 "PORTKEY_TEST_SECRET_CANARIES": ",".join(secrets.values()),
+                "PORTKEY_TEST_GATEWAY_SERVICE_ACCOUNT_JSON": str(
+                    service_account_file
+                ),
+                "PORTKEY_TEST_GATEWAY_IAM_STACK_JSON": str(stack_file),
+                "PORTKEY_TEST_GATEWAY_ROLE_JSON": str(role_file),
             }
             result = subprocess.run(
                 ["bash", str(script), "helm-plan"],
@@ -3200,6 +4140,14 @@ exit 0
             self.assertIn("  containerPort: 8787", captured_values)
             self.assertIn(self.certificate_arn("us-west-2"), captured_values)
             self.assertIn("pl-0123456789abcdef0", captured_values)
+            self.assertIn(
+                f'tag: "2026.08.03@{self.GATEWAY_IMAGE_DIGEST}"',
+                captured_values,
+            )
+            self.assertIn(
+                f'tag: "7.2.10-alpine@{self.REDIS_IMAGE_DIGEST}"',
+                captured_values,
+            )
             self.assertNotIn("  port: 80", captured_values)
             self.assertNotIn("0.0.0.0/0", captured_values)
             self.assertNotIn(secrets["PORTKEY_API_KEY"], captured_values)
@@ -3247,7 +4195,13 @@ exit 0
             kubectl.chmod(0o700)
 
             helm = fake_bin / "helm"
-            helm.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            helm.write_text(
+                "#!/usr/bin/env bash\n"
+                "if [[ \"${1:-}\" == version && \"${2:-}\" == --short ]]; "
+                "then printf '%s\\n' 'v3.21.4+gtest'; fi\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
             helm.chmod(0o700)
 
             base_environment = {
@@ -3263,7 +4217,9 @@ exit 0
                 "PORTKEY_ORGANIZATION_ID": "organization-id",
                 "PORTKEY_HELM_CHART_VERSION": "1.7.7",
                 "PORTKEY_GATEWAY_IMAGE_TAG": "2026.08.03",
+                "PORTKEY_GATEWAY_IMAGE_DIGEST": self.GATEWAY_IMAGE_DIGEST,
                 "PORTKEY_REDIS_IMAGE_TAG": "7.2.10-alpine",
+                "PORTKEY_REDIS_IMAGE_DIGEST": self.REDIS_IMAGE_DIGEST,
                 "PORTKEY_ENV_FILE": str(temp / "does-not-exist"),
                 "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
             }

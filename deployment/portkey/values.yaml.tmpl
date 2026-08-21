@@ -2,11 +2,11 @@ images:
   gatewayImage:
     repository: "docker.io/portkeyai/gateway_enterprise"
     pullPolicy: Always
-    tag: __PORTKEY_GATEWAY_IMAGE_TAG__
+    tag: __PORTKEY_GATEWAY_IMAGE_REFERENCE__
   redisImage:
     repository: "docker.io/redis"
     pullPolicy: IfNotPresent
-    tag: __PORTKEY_REDIS_IMAGE_TAG__
+    tag: __PORTKEY_REDIS_IMAGE_REFERENCE__
 
 imageCredentials:
   - name: portkey-enterprise-registry-credentials
@@ -45,6 +45,9 @@ ingress:
 
 mcpService:
   enabled: false
+
+redis:
+  serviceType: ClusterIP
 
 service:
   type: LoadBalancer

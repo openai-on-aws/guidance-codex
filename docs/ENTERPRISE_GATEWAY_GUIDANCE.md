@@ -119,12 +119,32 @@ or service-specific VPC endpoints where the service and region support them;
 Portkey outbound PrivateLink remains the separate vendor-assisted configuration
 described in the quick start.
 
+This path requires Helm CLI 3; CI and the reference render use 3.21.4. Helm 4
+changes `--post-renderer` to plugin semantics and is unsupported by the
+checked-in executable-post-renderer workflow.
+
+Require approved tag/digest pairs for both the Portkey gateway and Redis.
+Moving gateway aliases such as `latest`, `edge`, and `main-latest` are rejected;
+the Redis tag remains patch-pinned. The final references use
+`repository:<tag>@<configured-digest>`, so the digest—not the tag—selects
+content.
+Digest pinning establishes artifact identity, not a publisher signature or
+provenance. The workflow validates syntax but does not resolve private registry
+tags; approve each pair through Portkey or the organization's registry-promotion
+process. The included `t4g.medium` nodes require a multi-architecture index
+containing `linux/arm64` or a compatible `linux/arm64` manifest. Existing
+environment files without both digest values fail before a Helm write. Roll
+back by redeploying a prior approved tag/digest pair, not by restoring a
+pre-digest Helm revision.
+
 Before deployment, require exclusive or explicitly dedicated stack,
-namespace/gateway-service-account, and Helm-release names. This workflow can
-update a same-named CloudFormation stack or Helm release and uses
-`--override-existing-serviceaccounts` for the gateway service account without
-first proving ownership. Resolve collisions with the existing owner before
-deploying or cleaning up.
+namespace/gateway-service-account, and Helm-release names. The workflow creates
+a gateway service account only when it and its deterministic `eksctl` IAM
+stack are both absent. It allows an idempotent rerun only after verifying the
+existing pair's stack, role, trust, attached policy, and Kubernetes annotation;
+it never adopts an unmanaged same-named account. Partial, drifted, or unreadable
+state fails before writes. A same-named CloudFormation stack or Helm release can
+still be updated, so resolve those collisions with the existing owner.
 
 The included durable client path is deliberately private:
 
@@ -134,6 +154,10 @@ Codex over corporate/VPN routing
   -> internal IPv4 NLB TLS :443 (ACM; approved prefix list only)
   -> Portkey gateway TCP :8787
 ```
+
+The gateway is the sole `LoadBalancer` Service and sets
+`allocateLoadBalancerNodePorts: false`; Redis uses `ClusterIP`, and neither
+Service may retain a `nodePort`.
 
 Before deployment, the customer must provide private routing and resolver
 access to the EKS VPC, a controlled hostname, an issued certificate in the
@@ -268,6 +292,9 @@ and the following evidence is captured:
   listener on port 443, the expected ACM certificate and TLS policy, no
   plaintext port-80 listener, healthy port-8787 targets, and frontend ingress
   limited to the configured customer-managed prefix list.
+- The gateway is the only `LoadBalancer` Service, its
+  `allocateLoadBalancerNodePorts` field is `false`, Redis is `ClusterIP`, and
+  neither Service has a `nodePort`.
 - The private hostname resolves through the intended resolver path, an
   approved corporate/VPN client succeeds, and an unapproved routed client is
   rejected.
@@ -282,6 +309,13 @@ and the following evidence is captured:
   the agreed SLA.
 - Prompt, response, and trace retention match the customer's data policy.
 - Regional routing and disaster-recovery behavior are documented.
+
+For an existing TLS release with chart-default NodePorts, the helper first
+proves the expected single-port, IP-target gateway Service. With explicit write
+confirmation, it disables allocation and removes the existing gateway
+`nodePort` in one patch while Helm changes Redis to `ClusterIP`; IP targets do
+not require NLB replacement. Unexpected Service shape, target mode, lookup
+failure, or a remaining NodePort fails closed.
 
 Treat a deployment created with the earlier plaintext port-80 NLB as a
 controlled migration, not an in-place listener or security-group edit. First
@@ -326,12 +360,12 @@ deployment environment, a shell profile, or CI.
 
 Before cleanup, revoke the evaluation Workspace Service API key and remove the
 evaluation Model Catalog provider. Gateway cleanup targets the configured
-stack, release, namespace, and service-account names; it can be treated as
-walkthrough-owned only if the exclusive-name prerequisite was honored. It does
-not retrospectively establish ownership of a same-named stack/release or a
-gateway service account that deployment may have updated or overridden. Audit
-collisions and obtain the existing owner's approval before cleanup. The
-load-balancer-controller cleanup performs separate, stronger ownership checks.
+stack, release, namespace, and service-account names. It refuses to remove an
+unreadable, partial, unmanaged, or drifted gateway service-account/`eksctl`
+stack pair. Resolve that state with its owner, and separately verify the
+CloudFormation stack and Helm release because those names can still identify
+pre-existing resources. The load-balancer-controller cleanup performs its own
+ownership checks.
 Even when the controller Deployment is missing, it scans load-balancer,
 Ingress, and Gateway dependencies across all namespaces and probes the
 deterministic `eksctl` IAM stack. An orphaned stack without the expected

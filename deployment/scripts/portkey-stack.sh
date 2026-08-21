@@ -7,6 +7,7 @@ INFRA_TEMPLATE="$ROOT_DIR/deployment/portkey/hybrid-infrastructure.yaml"
 CLUSTER_TEMPLATE="$ROOT_DIR/deployment/portkey/eksctl-cluster.yaml.tmpl"
 LBC_POLICY_TEMPLATE="$ROOT_DIR/deployment/portkey/lbc-iam-policy.json.tmpl"
 VALUES_TEMPLATE="$ROOT_DIR/deployment/portkey/values.yaml.tmpl"
+PORTKEY_POST_RENDERER="$ROOT_DIR/deployment/portkey/portkey-post-renderer.sh"
 CONTRACT_PROBE="$ROOT_DIR/deployment/scripts/validate-responses-contract.py"
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -60,6 +61,10 @@ PORTKEY_MODEL="${PORTKEY_MODEL:-}"
 PORTKEY_ALLOWED_MODELS="${PORTKEY_ALLOWED_MODELS-openai.gpt-5.5}"
 PORTKEY_ALLOWED_MODEL_IDS=()
 BEDROCK_MANTLE_PROJECT_ID="${BEDROCK_MANTLE_PROJECT_ID:-*}"
+PORTKEY_GATEWAY_SERVICE_ACCOUNT_PRESENT=false
+PORTKEY_GATEWAY_IAM_STACK_PRESENT=false
+PORTKEY_GATEWAY_IRSA_DEPLOY_STATE=
+PORTKEY_GATEWAY_IRSA_ROLE_ARN=
 export AWS_REGION
 [[ -z "${AWS_PROFILE:-}" ]] || export AWS_PROFILE
 [[ -z "${KUBECONFIG:-}" ]] || export KUBECONFIG
@@ -363,6 +368,15 @@ raise SystemExit(
 PY
 }
 
+require_helm3() {
+  require_command helm
+  local version
+  version="$(helm version --short 2>/dev/null)" || \
+    die 'could not determine the installed Helm version'
+  [[ "$version" =~ ^v?3\. ]] || \
+    die 'Helm 3 is required; Helm 4 does not support this executable post-renderer interface'
+}
+
 require_eksctl_lbc_reconciliation_version() {
   require_eksctl
   local version
@@ -494,7 +508,7 @@ config = {
                     "name": "aws-load-balancer-controller",
                     "namespace": "kube-system",
                     "labels": {
-                        "app.kubernetes.io/managed-by": "guidance-codex",
+                        "app.kubernetes.io/managed-by": "eksctl",
                     },
                 },
                 "attachPolicy": policy,
@@ -554,8 +568,10 @@ plan() {
 stack_exists() { aws_cli cloudformation describe-stacks --stack-name "$PORTKEY_STACK_NAME" >/dev/null 2>&1; }
 
 deploy() {
-  plan; confirm_write
-  require_eksctl
+  plan
+  require_eksctl; kube_context
+  prepare_gateway_iam_service_account_deploy
+  confirm_write
   eksctl utils associate-iam-oidc-provider --cluster "$PORTKEY_CLUSTER_NAME" --region "$AWS_REGION" --approve
   aws_cli cloudformation deploy --stack-name "$PORTKEY_STACK_NAME" \
     --template-file "$INFRA_TEMPLATE" --parameter-overrides \
@@ -566,9 +582,17 @@ deploy() {
     --tags Application=guidance-codex-portkey
   local policy_arn
   policy_arn="$(stack_output GatewayManagedPolicyArn)"
-  eksctl create iamserviceaccount --cluster "$PORTKEY_CLUSTER_NAME" --region "$AWS_REGION" \
-    --namespace "$PORTKEY_NAMESPACE" --name "$PORTKEY_SERVICE_ACCOUNT" \
-    --attach-policy-arn "$policy_arn" --approve --override-existing-serviceaccounts
+  if [[ "$PORTKEY_GATEWAY_IRSA_DEPLOY_STATE" == fresh ]]; then
+    eksctl create iamserviceaccount --cluster "$PORTKEY_CLUSTER_NAME" --region "$AWS_REGION" \
+      --namespace "$PORTKEY_NAMESPACE" --name "$PORTKEY_SERVICE_ACCOUNT" \
+      --attach-policy-arn "$policy_arn" \
+      --tags Application=guidance-codex-portkey --approve
+    require_gateway_iam_service_account true
+  else
+    require_gateway_iam_service_account false
+    printf 'Reusing the verified walkthrough-managed gateway IAM service account %s/%s.\n' \
+      "$PORTKEY_NAMESPACE" "$PORTKEY_SERVICE_ACCOUNT"
+  fi
 }
 
 stack_output() {
@@ -576,26 +600,317 @@ stack_output() {
     --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue|[0]" --output text
 }
 
+gateway_iam_service_account_stack_name() {
+  printf 'eksctl-%s-addon-iamserviceaccount-%s-%s\n' \
+    "$PORTKEY_CLUSTER_NAME" "$PORTKEY_NAMESPACE" "$PORTKEY_SERVICE_ACCOUNT"
+}
+
+probe_gateway_iam_service_account_resources() {
+  local error_file expected_stack_name observed_stack_name resource
+  PORTKEY_GATEWAY_SERVICE_ACCOUNT_PRESENT=false
+  PORTKEY_GATEWAY_IAM_STACK_PRESENT=false
+
+  resource="$(kubectl -n "$PORTKEY_NAMESPACE" get serviceaccount \
+    "$PORTKEY_SERVICE_ACCOUNT" --ignore-not-found -o name)" || \
+    die 'could not determine whether the Portkey gateway service account exists'
+  if [[ -n "$resource" ]]; then
+    [[ "$resource" == "serviceaccount/$PORTKEY_SERVICE_ACCOUNT" ]] || \
+      die 'the Portkey gateway service-account lookup returned an unexpected resource'
+    PORTKEY_GATEWAY_SERVICE_ACCOUNT_PRESENT=true
+  fi
+
+  expected_stack_name="$(gateway_iam_service_account_stack_name)"
+  error_file="$(mktemp)"
+  chmod 600 "$error_file"
+  if observed_stack_name="$(aws_cli cloudformation describe-stacks \
+    --stack-name "$expected_stack_name" --query 'Stacks[0].StackName' \
+    --output text 2>"$error_file")"; then
+    rm -f "$error_file"
+    [[ "$observed_stack_name" == "$expected_stack_name" ]] || \
+      die 'the gateway IAM service-account stack lookup returned an unexpected stack'
+    PORTKEY_GATEWAY_IAM_STACK_PRESENT=true
+    return
+  fi
+  if grep -q 'ValidationError' "$error_file" && \
+    grep -qi 'does not exist' "$error_file"; then
+    rm -f "$error_file"
+    return
+  fi
+  rm -f "$error_file"
+  die 'could not determine whether the gateway IAM service-account stack exists'
+}
+
+validate_gateway_iam_service_account() {
+  require_command aws; require_command python3
+  local expected_policy_arn="$1" require_application_tag="${2:-false}"
+  local account_id attached_arns_json expected_stack_name inline_names_json
+  local oidc_issuer role_account role_arn role_json role_name role_partition
+  local service_account_json stack_json
+
+  [[ "$require_application_tag" == true || "$require_application_tag" == false ]] || \
+    die 'invalid gateway IAM service-account validation mode'
+  account_id="$(aws_cli sts get-caller-identity --query Account --output text)" || \
+    die 'could not verify the gateway IAM service-account AWS account'
+  [[ "$account_id" =~ ^[0-9]{12}$ ]] || \
+    die 'could not verify the gateway IAM service-account AWS account'
+  [[ "$expected_policy_arn" =~ ^arn:([^:]+):iam::([0-9]{12}):policy/(.+)$ ]] || \
+    die 'the Portkey AWS stack returned an invalid gateway managed-policy ARN'
+  [[ "${BASH_REMATCH[1]}" == "$(aws_partition_for_region "$AWS_REGION")" && \
+     "${BASH_REMATCH[2]}" == "$account_id" ]] || \
+    die 'the gateway managed policy must belong to the authenticated AWS account and partition'
+
+  expected_stack_name="$(gateway_iam_service_account_stack_name)"
+  service_account_json="$(kubectl -n "$PORTKEY_NAMESPACE" get serviceaccount \
+    "$PORTKEY_SERVICE_ACCOUNT" -o json)" || \
+    die 'could not inspect the Portkey gateway service account'
+  role_arn="$(kubectl -n "$PORTKEY_NAMESPACE" get serviceaccount \
+    "$PORTKEY_SERVICE_ACCOUNT" \
+    -o jsonpath='{.metadata.annotations.eks\.amazonaws\.com/role-arn}')" || \
+    die 'could not inspect the Portkey gateway service-account role annotation'
+  [[ "$role_arn" =~ ^arn:([^:]+):iam::([0-9]{12}):role/(.+)$ ]] || \
+    die 'the Portkey gateway service account has no valid IAM role annotation'
+  role_partition="${BASH_REMATCH[1]}"
+  role_account="${BASH_REMATCH[2]}"
+  role_name="${BASH_REMATCH[3]##*/}"
+  [[ "$role_partition" == "$(aws_partition_for_region "$AWS_REGION")" && \
+     "$role_account" == "$account_id" ]] || \
+    die 'the Portkey gateway IAM role must belong to the authenticated AWS account and partition'
+
+  stack_json="$(aws_cli cloudformation describe-stacks \
+    --stack-name "$expected_stack_name" --output json)" || \
+    die 'the expected gateway IAM service-account stack is missing or unreadable'
+  role_json="$(aws_cli iam get-role --role-name "$role_name" --output json)" || \
+    die 'could not inspect the live Portkey gateway IAM role'
+  oidc_issuer="$(cluster_identity)" || \
+    die 'could not resolve the EKS OIDC issuer for the Portkey gateway IAM role'
+  [[ "$oidc_issuer" == https://* ]] || \
+    die 'EKS returned an invalid OIDC issuer for the Portkey gateway IAM role'
+  attached_arns_json="$(aws_cli iam list-attached-role-policies \
+    --role-name "$role_name" --query 'AttachedPolicies[].PolicyArn' --output json)" || \
+    die 'could not inspect managed policies on the Portkey gateway IAM role'
+  inline_names_json="$(aws_cli iam list-role-policies --role-name "$role_name" \
+    --query PolicyNames --output json)" || \
+    die 'could not inspect inline policies on the Portkey gateway IAM role'
+
+  PORTKEY_GATEWAY_SERVICE_ACCOUNT_JSON="$service_account_json" \
+    PORTKEY_GATEWAY_IAM_STACK_JSON="$stack_json" \
+    PORTKEY_GATEWAY_IAM_ROLE_JSON="$role_json" \
+    PORTKEY_GATEWAY_ATTACHED_POLICY_ARNS_JSON="$attached_arns_json" \
+    PORTKEY_GATEWAY_INLINE_POLICY_NAMES_JSON="$inline_names_json" \
+    PORTKEY_EXPECTED_GATEWAY_IAM_STACK="$expected_stack_name" \
+    PORTKEY_EXPECTED_CLUSTER="$PORTKEY_CLUSTER_NAME" \
+    PORTKEY_EXPECTED_IAM_SERVICE_ACCOUNT="$PORTKEY_NAMESPACE/$PORTKEY_SERVICE_ACCOUNT" \
+    PORTKEY_EXPECTED_NAMESPACE="$PORTKEY_NAMESPACE" \
+    PORTKEY_EXPECTED_SERVICE_ACCOUNT="$PORTKEY_SERVICE_ACCOUNT" \
+    PORTKEY_EXPECTED_ROLE_ARN="$role_arn" \
+    PORTKEY_EXPECTED_POLICY_ARN="$expected_policy_arn" \
+    PORTKEY_EXPECTED_OIDC_ISSUER="$oidc_issuer" \
+    PORTKEY_EXPECTED_PARTITION="$role_partition" \
+    PORTKEY_EXPECTED_ACCOUNT_ID="$account_id" \
+    PORTKEY_REQUIRE_APPLICATION_TAG="$require_application_tag" python3 - <<'PY' || \
+    die 'gateway IAM service-account ownership validation failed'
+import json
+import os
+
+
+def reject(message):
+    raise SystemExit(message)
+
+
+service_account = json.loads(os.environ["PORTKEY_GATEWAY_SERVICE_ACCOUNT_JSON"])
+metadata = service_account.get("metadata")
+if not isinstance(metadata, dict):
+    reject("gateway service-account metadata is malformed")
+if (
+    metadata.get("namespace") != os.environ["PORTKEY_EXPECTED_NAMESPACE"]
+    or metadata.get("name") != os.environ["PORTKEY_EXPECTED_SERVICE_ACCOUNT"]
+):
+    reject("gateway service-account identity does not match")
+labels = metadata.get("labels") or {}
+annotations = metadata.get("annotations") or {}
+if labels.get("app.kubernetes.io/managed-by") != "eksctl":
+    reject("gateway service account is not managed by eksctl")
+if annotations.get("eks.amazonaws.com/role-arn") != os.environ[
+    "PORTKEY_EXPECTED_ROLE_ARN"
+]:
+    reject("gateway service-account role annotation does not match")
+
+payload = json.loads(os.environ["PORTKEY_GATEWAY_IAM_STACK_JSON"])
+stacks = payload.get("Stacks")
+if not isinstance(stacks, list) or len(stacks) != 1:
+    reject("expected exactly one gateway IAM service-account stack")
+stack = stacks[0]
+if stack.get("StackName") != os.environ["PORTKEY_EXPECTED_GATEWAY_IAM_STACK"]:
+    reject("gateway IAM service-account stack name does not match")
+if stack.get("StackStatus") not in {"CREATE_COMPLETE", "UPDATE_COMPLETE"}:
+    reject("gateway IAM service-account stack is not in a stable successful state")
+tags = {
+    item.get("Key"): item.get("Value")
+    for item in stack.get("Tags", [])
+    if isinstance(item, dict)
+}
+expected_tags = {
+    "alpha.eksctl.io/cluster-name": os.environ["PORTKEY_EXPECTED_CLUSTER"],
+    "alpha.eksctl.io/iamserviceaccount-name": os.environ[
+        "PORTKEY_EXPECTED_IAM_SERVICE_ACCOUNT"
+    ],
+}
+if any(tags.get(key) != value for key, value in expected_tags.items()):
+    reject("gateway IAM service-account stack ownership tags do not match")
+application = tags.get("Application")
+if application not in {None, "guidance-codex-portkey"}:
+    reject("gateway IAM service-account stack Application tag does not match")
+if (
+    os.environ["PORTKEY_REQUIRE_APPLICATION_TAG"] == "true"
+    and application != "guidance-codex-portkey"
+):
+    reject("new gateway IAM service-account stack is missing its Application tag")
+outputs = {
+    item.get("OutputKey"): item.get("OutputValue")
+    for item in stack.get("Outputs", [])
+    if isinstance(item, dict)
+}
+if outputs.get("Role1") != os.environ["PORTKEY_EXPECTED_ROLE_ARN"]:
+    reject("gateway IAM stack Role1 output does not match the service account")
+
+live_role = json.loads(os.environ["PORTKEY_GATEWAY_IAM_ROLE_JSON"]).get("Role")
+if not isinstance(live_role, dict):
+    reject("live gateway IAM role is malformed")
+if live_role.get("Arn") != os.environ["PORTKEY_EXPECTED_ROLE_ARN"]:
+    reject("live gateway IAM role does not match the service account")
+if live_role.get("PermissionsBoundary"):
+    reject("gateway IAM role has an unsupported permissions boundary")
+
+issuer = os.environ["PORTKEY_EXPECTED_OIDC_ISSUER"][len("https://") :]
+provider = (
+    f"arn:{os.environ['PORTKEY_EXPECTED_PARTITION']}:iam::"
+    f"{os.environ['PORTKEY_EXPECTED_ACCOUNT_ID']}:oidc-provider/{issuer}"
+)
+expected_conditions = {
+    f"{issuer}:aud": "sts.amazonaws.com",
+    f"{issuer}:sub": (
+        "system:serviceaccount:"
+        + os.environ["PORTKEY_EXPECTED_IAM_SERVICE_ACCOUNT"].replace("/", ":")
+    ),
+}
+trust = live_role.get("AssumeRolePolicyDocument")
+statements = trust.get("Statement") if isinstance(trust, dict) else None
+if isinstance(statements, dict):
+    statements = [statements]
+if not isinstance(statements, list) or len(statements) != 1:
+    reject("gateway IAM role trust is not the expected single IRSA statement")
+statement = statements[0]
+
+
+def singleton(value):
+    if isinstance(value, list):
+        if len(value) != 1:
+            reject("gateway IAM role trust contains multiple values")
+        return value[0]
+    return value
+
+
+principal = statement.get("Principal")
+federated = principal.get("Federated") if isinstance(principal, dict) else None
+condition = statement.get("Condition")
+string_equals = condition.get("StringEquals") if isinstance(condition, dict) else None
+if isinstance(string_equals, dict):
+    string_equals = {key: singleton(value) for key, value in string_equals.items()}
+if (
+    statement.get("Effect") != "Allow"
+    or singleton(statement.get("Action")) != "sts:AssumeRoleWithWebIdentity"
+    or singleton(federated) != provider
+    or string_equals != expected_conditions
+    or set(condition or {}) != {"StringEquals"}
+    or set(principal or {}) != {"Federated"}
+):
+    reject("gateway IAM role trust does not match the exact service-account subject")
+
+attached = json.loads(os.environ["PORTKEY_GATEWAY_ATTACHED_POLICY_ARNS_JSON"])
+if attached != [os.environ["PORTKEY_EXPECTED_POLICY_ARN"]]:
+    reject("gateway IAM role managed-policy attachments do not match")
+inline = json.loads(os.environ["PORTKEY_GATEWAY_INLINE_POLICY_NAMES_JSON"])
+if inline != []:
+    reject("gateway IAM role contains unexpected inline policies")
+PY
+  PORTKEY_GATEWAY_IRSA_ROLE_ARN="$role_arn"
+}
+
+prepare_gateway_iam_service_account_deploy() {
+  probe_gateway_iam_service_account_resources
+  if [[ "$PORTKEY_GATEWAY_SERVICE_ACCOUNT_PRESENT" == false && \
+        "$PORTKEY_GATEWAY_IAM_STACK_PRESENT" == false ]]; then
+    PORTKEY_GATEWAY_IRSA_DEPLOY_STATE=fresh
+    return
+  fi
+  if [[ "$PORTKEY_GATEWAY_SERVICE_ACCOUNT_PRESENT" == true && \
+        "$PORTKEY_GATEWAY_IAM_STACK_PRESENT" == false ]]; then
+    die "service account $PORTKEY_NAMESPACE/$PORTKEY_SERVICE_ACCOUNT already exists without its expected eksctl IAM stack; choose a unique PORTKEY_NAMESPACE/PORTKEY_SERVICE_ACCOUNT pair or resolve the collision with its owner"
+  fi
+  if [[ "$PORTKEY_GATEWAY_SERVICE_ACCOUNT_PRESENT" == false && \
+        "$PORTKEY_GATEWAY_IAM_STACK_PRESENT" == true ]]; then
+    die "gateway IAM stack $(gateway_iam_service_account_stack_name) exists without its expected Kubernetes service account; resolve this orphaned state with the cluster owner"
+  fi
+  local policy_arn
+  policy_arn="$(stack_output GatewayManagedPolicyArn)" || \
+    die 'could not resolve the expected gateway managed-policy ARN for the existing service account'
+  validate_gateway_iam_service_account "$policy_arn" false
+  PORTKEY_GATEWAY_IRSA_DEPLOY_STATE=managed
+}
+
+require_gateway_iam_service_account() {
+  local require_application_tag="${1:-false}" policy_arn
+  probe_gateway_iam_service_account_resources
+  if [[ "$PORTKEY_GATEWAY_SERVICE_ACCOUNT_PRESENT" == false && \
+        "$PORTKEY_GATEWAY_IAM_STACK_PRESENT" == false ]]; then
+    die 'the Portkey gateway IAM service account is not deployed'
+  fi
+  if [[ "$PORTKEY_GATEWAY_SERVICE_ACCOUNT_PRESENT" == true && \
+        "$PORTKEY_GATEWAY_IAM_STACK_PRESENT" == false ]]; then
+    die "service account $PORTKEY_NAMESPACE/$PORTKEY_SERVICE_ACCOUNT exists without its expected eksctl IAM stack; refusing to use or remove it"
+  fi
+  if [[ "$PORTKEY_GATEWAY_SERVICE_ACCOUNT_PRESENT" == false && \
+        "$PORTKEY_GATEWAY_IAM_STACK_PRESENT" == true ]]; then
+    die "gateway IAM stack $(gateway_iam_service_account_stack_name) exists without its expected Kubernetes service account; refusing automated mutation"
+  fi
+  policy_arn="$(stack_output GatewayManagedPolicyArn)" || \
+    die 'could not resolve the expected gateway managed-policy ARN'
+  validate_gateway_iam_service_account "$policy_arn" "$require_application_tag"
+}
+
 validate_helm_secrets() {
-  for name in PORTKEY_DOCKER_USERNAME PORTKEY_DOCKER_PASSWORD PORTKEY_CLIENT_AUTH PORTKEY_ORGANIZATION_ID PORTKEY_HELM_CHART_VERSION PORTKEY_GATEWAY_IMAGE_TAG PORTKEY_REDIS_IMAGE_TAG; do require_value "$name"; done
-  [[ "$PORTKEY_GATEWAY_IMAGE_TAG" != latest ]] || die 'pin the Portkey gateway image tag; latest is not accepted'
+  local name
+  for name in PORTKEY_DOCKER_USERNAME PORTKEY_DOCKER_PASSWORD PORTKEY_CLIENT_AUTH PORTKEY_ORGANIZATION_ID PORTKEY_HELM_CHART_VERSION PORTKEY_GATEWAY_IMAGE_TAG PORTKEY_GATEWAY_IMAGE_DIGEST PORTKEY_REDIS_IMAGE_TAG PORTKEY_REDIS_IMAGE_DIGEST; do require_value "$name"; done
+  [[ "$PORTKEY_GATEWAY_IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]] || \
+    die 'PORTKEY_GATEWAY_IMAGE_TAG must be a valid OCI image tag'
+  case "$PORTKEY_GATEWAY_IMAGE_TAG" in
+    [Ll][Aa][Tt][Ee][Ss][Tt]|[Ee][Dd][Gg][Ee]|[Mm][Aa][Ii][Nn]-[Ll][Aa][Tt][Ee][Ss][Tt])
+      die 'PORTKEY_GATEWAY_IMAGE_TAG must be a Portkey-supported version tag, not a mutable alias'
+      ;;
+  esac
   [[ "$PORTKEY_REDIS_IMAGE_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpine([0-9.]*)?$ ]] || die 'PORTKEY_REDIS_IMAGE_TAG must pin a patch release such as 7.2.10-alpine'
+  [[ "$PORTKEY_GATEWAY_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || \
+    die 'PORTKEY_GATEWAY_IMAGE_DIGEST must be sha256 followed by 64 lowercase hexadecimal characters'
+  [[ "$PORTKEY_REDIS_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || \
+    die 'PORTKEY_REDIS_IMAGE_DIGEST must be sha256 followed by 64 lowercase hexadecimal characters'
 }
 
 render_values() {
-  local output="$1" role bucket
+  local output="$1" role bucket gateway_image_reference redis_image_reference
   validate_helm_secrets
   validate_nlb_tls_aws
   kube_context
-  role="$(kubectl -n "$PORTKEY_NAMESPACE" get serviceaccount "$PORTKEY_SERVICE_ACCOUNT" -o jsonpath='{.metadata.annotations.eks\.amazonaws\.com/role-arn}')"
-  [[ "$role" == arn:*:iam::*:role/* ]] || die 'IRSA role annotation is missing from the Portkey service account'
+  require_gateway_iam_service_account
+  role="$PORTKEY_GATEWAY_IRSA_ROLE_ARN"
   bucket="$(stack_output GatewayLogBucketName)"
+  gateway_image_reference="${PORTKEY_GATEWAY_IMAGE_TAG}@${PORTKEY_GATEWAY_IMAGE_DIGEST}"
+  redis_image_reference="${PORTKEY_REDIS_IMAGE_TAG}@${PORTKEY_REDIS_IMAGE_DIGEST}"
   PORTKEY_VALUES_OUTPUT="$output" PORTKEY_VALUES_TEMPLATE="$VALUES_TEMPLATE" \
   PORTKEY_SERVICE_ROLE_ARN="$role" PORTKEY_LOG_BUCKET="$bucket" \
   PORTKEY_NAMESPACE="$PORTKEY_NAMESPACE" PORTKEY_SERVICE_ACCOUNT="$PORTKEY_SERVICE_ACCOUNT" \
   PORTKEY_DOCKER_USERNAME="$PORTKEY_DOCKER_USERNAME" PORTKEY_DOCKER_PASSWORD="$PORTKEY_DOCKER_PASSWORD" \
   PORTKEY_CLIENT_AUTH="$PORTKEY_CLIENT_AUTH" PORTKEY_ORGANIZATION_ID="$PORTKEY_ORGANIZATION_ID" \
-  PORTKEY_GATEWAY_IMAGE_TAG="$PORTKEY_GATEWAY_IMAGE_TAG" PORTKEY_REDIS_IMAGE_TAG="$PORTKEY_REDIS_IMAGE_TAG" \
+  PORTKEY_GATEWAY_IMAGE_REFERENCE="$gateway_image_reference" PORTKEY_REDIS_IMAGE_REFERENCE="$redis_image_reference" \
   PORTKEY_NLB_TLS_CERTIFICATE_ARN="$PORTKEY_NLB_TLS_CERTIFICATE_ARN" \
   PORTKEY_NLB_ALLOWED_PREFIX_LIST_IDS="$PORTKEY_NLB_ALLOWED_PREFIX_LIST_IDS" \
   PORTKEY_LOG_STORE_REGION="$AWS_REGION" python3 - <<'PY'
@@ -607,8 +922,8 @@ mapping = {
  "PORTKEY_DOCKER_PASSWORD": os.environ["PORTKEY_DOCKER_PASSWORD"],
  "PORTKEY_CLIENT_AUTH": os.environ["PORTKEY_CLIENT_AUTH"],
  "PORTKEY_ORGANIZATION_ID": os.environ["PORTKEY_ORGANIZATION_ID"],
- "PORTKEY_GATEWAY_IMAGE_TAG": os.environ["PORTKEY_GATEWAY_IMAGE_TAG"],
- "PORTKEY_REDIS_IMAGE_TAG": os.environ["PORTKEY_REDIS_IMAGE_TAG"],
+ "PORTKEY_GATEWAY_IMAGE_REFERENCE": os.environ["PORTKEY_GATEWAY_IMAGE_REFERENCE"],
+ "PORTKEY_REDIS_IMAGE_REFERENCE": os.environ["PORTKEY_REDIS_IMAGE_REFERENCE"],
  "PORTKEY_LOG_BUCKET": os.environ["PORTKEY_LOG_BUCKET"],
  "PORTKEY_LOG_STORE_REGION": os.environ["PORTKEY_LOG_STORE_REGION"],
  "PORTKEY_SERVICE_ACCOUNT": os.environ["PORTKEY_SERVICE_ACCOUNT"],
@@ -2082,7 +2397,7 @@ install_load_balancer_controller() {
       rm -f "$rendered"; trap - EXIT
       return
     else
-      die 'refusing to overwrite an existing AWS Load Balancer Controller service account that is not managed by guidance-codex'
+      die 'refusing to overwrite an AWS Load Balancer Controller service account that is not verifiably owned by this walkthrough'
     fi
   else
     [[ "$controller_present" == false ]] || \
@@ -2126,12 +2441,17 @@ install_load_balancer_controller() {
 }
 
 load_balancer_controller_service_account_is_managed() {
-  local managed_by role
+  local application managed_by role
   managed_by="$(kubectl -n "$AWS_LBC_NAMESPACE" get serviceaccount "$AWS_LBC_SERVICE_ACCOUNT" \
     -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null || true)"
   role="$(kubectl -n "$AWS_LBC_NAMESPACE" get serviceaccount "$AWS_LBC_SERVICE_ACCOUNT" \
     -o jsonpath='{.metadata.annotations.eks\.amazonaws\.com/role-arn}' 2>/dev/null || true)"
-  [[ "$managed_by" == guidance-codex && "$role" == arn:*:iam::*:role/* ]]
+  [[ "$managed_by" == eksctl && "$role" == arn:*:iam::*:role/* ]] || return 1
+  application="$(aws_cli cloudformation describe-stacks \
+    --stack-name "$(walkthrough_lbc_stack_name)" \
+    --query "Stacks[0].Tags[?Key=='Application'].Value|[0]" --output text \
+    2>/dev/null)" || return 1
+  [[ "$application" == guidance-codex-portkey ]]
 }
 
 require_no_load_balancer_controller_dependents() {
@@ -2206,7 +2526,7 @@ load_balancer_controller_cleanup_plan() {
     dependency_scope=all
   fi
   if [[ "$service_account_present" == true ]] && ! load_balancer_controller_service_account_is_managed; then
-    die 'refusing to remove an AWS Load Balancer Controller service account that is not managed by guidance-codex'
+    die 'refusing to remove an AWS Load Balancer Controller service account that is not verifiably owned by this walkthrough'
   fi
   if [[ "$service_account_present" == true ]]; then
     validate_walkthrough_lbc_stack
@@ -2250,13 +2570,111 @@ load_balancer_controller_cleanup() {
   fi
 }
 
+remove_gateway_nodeport_allocation() {
+  local patch service_json service_resource
+  service_resource="$(kubectl -n "$PORTKEY_NAMESPACE" get service \
+    "$PORTKEY_GATEWAY_SERVICE" --ignore-not-found -o name)" || \
+    die 'could not determine whether the Portkey gateway Service needs NodePort cleanup'
+  [[ -n "$service_resource" ]] || return 0
+
+  # Only mutate an existing Service after the complete private NLB/TLS guard
+  # has proved that it is the expected IP-target gateway exposure.
+  require_safe_nlb_service_upgrade pre
+  service_json="$(kubectl -n "$PORTKEY_NAMESPACE" get service \
+    "$PORTKEY_GATEWAY_SERVICE" -o json)" || \
+    die 'could not inspect the Portkey gateway Service before NodePort cleanup'
+  patch="$(PORTKEY_GATEWAY_SERVICE_JSON="$service_json" python3 - <<'PY'
+import json
+import os
+
+service = json.loads(os.environ["PORTKEY_GATEWAY_SERVICE_JSON"])
+spec = service.get("spec")
+if not isinstance(spec, dict) or spec.get("type") != "LoadBalancer":
+    raise SystemExit("the gateway is not a LoadBalancer Service")
+ports = spec.get("ports")
+if not isinstance(ports, list) or len(ports) != 1:
+    raise SystemExit("the gateway Service does not have exactly one port")
+
+patch = []
+if spec.get("allocateLoadBalancerNodePorts") is not False:
+    patch.append(
+        {
+            "op": "add",
+            "path": "/spec/allocateLoadBalancerNodePorts",
+            "value": False,
+        }
+    )
+for index in range(len(ports) - 1, -1, -1):
+    if "nodePort" in ports[index]:
+        patch.append({"op": "remove", "path": f"/spec/ports/{index}/nodePort"})
+print(json.dumps(patch, separators=(",", ":")))
+PY
+)" || die 'could not construct the reviewed gateway NodePort-removal patch'
+  [[ "$patch" != '[]' ]] || return 0
+  kubectl -n "$PORTKEY_NAMESPACE" patch service "$PORTKEY_GATEWAY_SERVICE" \
+    --type=json --patch "$patch" >/dev/null || \
+    die 'could not atomically disable and remove the gateway Service NodePort allocation'
+}
+
+validate_portkey_service_surface() {
+  local services_json
+  services_json="$(kubectl -n "$PORTKEY_NAMESPACE" get services -o json)" || \
+    die 'could not inspect the Portkey Service exposure surface'
+  PORTKEY_SERVICES_JSON="$services_json" \
+    PORTKEY_EXPECTED_GATEWAY_SERVICE="$PORTKEY_GATEWAY_SERVICE" python3 - <<'PY' || \
+    die 'the Portkey release has an unexpected Service exposure; require one private gateway LoadBalancer, ClusterIP Redis, and no NodePort Services'
+import json
+import os
+
+items = json.loads(os.environ["PORTKEY_SERVICES_JSON"]).get("items")
+if not isinstance(items, list):
+    raise SystemExit(1)
+services = {
+    item.get("metadata", {}).get("name"): item
+    for item in items
+    if isinstance(item, dict)
+}
+gateway_name = os.environ["PORTKEY_EXPECTED_GATEWAY_SERVICE"]
+gateway = services.get(gateway_name)
+redis = services.get("redis")
+if not isinstance(gateway, dict) or not isinstance(redis, dict):
+    raise SystemExit(1)
+gateway_spec = gateway.get("spec", {})
+redis_spec = redis.get("spec", {})
+if gateway_spec.get("type") != "LoadBalancer":
+    raise SystemExit(1)
+if gateway_spec.get("allocateLoadBalancerNodePorts") is not False:
+    raise SystemExit(1)
+if any("nodePort" in port for port in gateway_spec.get("ports", [])):
+    raise SystemExit(1)
+if redis_spec.get("type", "ClusterIP") != "ClusterIP":
+    raise SystemExit(1)
+if any("nodePort" in port for port in redis_spec.get("ports", [])):
+    raise SystemExit(1)
+if any(item.get("spec", {}).get("type") == "NodePort" for item in items):
+    raise SystemExit(1)
+load_balancers = [
+    item.get("metadata", {}).get("name")
+    for item in items
+    if item.get("spec", {}).get("type") == "LoadBalancer"
+]
+if load_balancers != [gateway_name]:
+    raise SystemExit(1)
+PY
+}
+
 helm_plan() {
-  require_command helm; stack_exists || die 'deploy the Portkey AWS stack first'
+  require_helm3; stack_exists || die 'deploy the Portkey AWS stack first'
+  [[ -x "$PORTKEY_POST_RENDERER" ]] || \
+    die 'the Portkey Helm post-renderer is missing or not executable'
   local values; values="$(mktemp)"; trap "rm -f '$values'" EXIT
   render_values "$values"
   helm repo add portkey-ai https://portkey-ai.github.io/helm --force-update >/dev/null
   helm repo update portkey-ai >/dev/null
-  helm template "$PORTKEY_HELM_RELEASE" portkey-ai/gateway --version "$PORTKEY_HELM_CHART_VERSION" --namespace "$PORTKEY_NAMESPACE" -f "$values" >/dev/null
+  PORTKEY_POST_RENDER_SERVICE_NAME="$PORTKEY_GATEWAY_SERVICE" \
+    helm template "$PORTKEY_HELM_RELEASE" portkey-ai/gateway \
+      --version "$PORTKEY_HELM_CHART_VERSION" --namespace "$PORTKEY_NAMESPACE" \
+      -f "$values" --post-renderer "$PORTKEY_POST_RENDERER" >/dev/null
   rm -f "$values"; trap - EXIT
   printf 'Portkey Helm release renders successfully; secrets were held in a mode-0600 temporary file.\n'
 }
@@ -2265,13 +2683,18 @@ helm_deploy() {
   helm_plan; confirm_write; require_command kubectl; kube_context
   require_load_balancer_controller
   require_safe_nlb_service_upgrade pre
+  remove_gateway_nodeport_allocation
   local values; values="$(mktemp)"; trap "rm -f '$values'" EXIT
   render_values "$values"
-  if ! helm upgrade --install "$PORTKEY_HELM_RELEASE" portkey-ai/gateway --version "$PORTKEY_HELM_CHART_VERSION" \
-    --namespace "$PORTKEY_NAMESPACE" --create-namespace -f "$values" --wait --timeout 15m; then
+  if ! PORTKEY_POST_RENDER_SERVICE_NAME="$PORTKEY_GATEWAY_SERVICE" \
+    helm upgrade --install "$PORTKEY_HELM_RELEASE" portkey-ai/gateway \
+      --version "$PORTKEY_HELM_CHART_VERSION" \
+      --namespace "$PORTKEY_NAMESPACE" --create-namespace -f "$values" \
+      --post-renderer "$PORTKEY_POST_RENDERER" --wait --timeout 15m; then
     die 'Helm reported failure after it may have changed the Portkey release; inspect the Service, Ingress, and Gateway resources and correct them through the reviewed TLS path. Do not roll back to a revision containing the legacy plaintext Service'
   fi
   require_safe_nlb_service_upgrade post
+  validate_portkey_service_surface
   rm -f "$values"; trap - EXIT
 }
 
@@ -2283,6 +2706,7 @@ gateway_hostname() {
 status() {
   aws_check; kube_context
   stack_exists || die 'Portkey AWS stack is not deployed'
+  require_gateway_iam_service_account
   aws_cli cloudformation describe-stacks --stack-name "$PORTKEY_STACK_NAME" --query 'Stacks[0].StackStatus' --output text
   kubectl -n "$PORTKEY_NAMESPACE" get pods,service
   local host; host="$(gateway_hostname)"
@@ -2392,8 +2816,13 @@ cleanup_plan() { status; printf 'Cleanup removes Helm release %s and stack %s; t
 cleanup() {
   cleanup_plan; [[ "${CONFIRM_STACK_DELETE:-}" == "$PORTKEY_STACK_NAME" ]] || die "set CONFIRM_STACK_DELETE=$PORTKEY_STACK_NAME"
   helm uninstall "$PORTKEY_HELM_RELEASE" -n "$PORTKEY_NAMESPACE" --wait
+  require_gateway_iam_service_account
   eksctl delete iamserviceaccount --cluster "$PORTKEY_CLUSTER_NAME" --region "$AWS_REGION" \
     --namespace "$PORTKEY_NAMESPACE" --name "$PORTKEY_SERVICE_ACCOUNT" --wait
+  probe_gateway_iam_service_account_resources
+  [[ "$PORTKEY_GATEWAY_SERVICE_ACCOUNT_PRESENT" == false && \
+     "$PORTKEY_GATEWAY_IAM_STACK_PRESENT" == false ]] || \
+    die 'eksctl reported success, but the gateway service account or its IAM stack still exists'
   aws_cli cloudformation delete-stack --stack-name "$PORTKEY_STACK_NAME"
   aws_cli cloudformation wait stack-delete-complete --stack-name "$PORTKEY_STACK_NAME"
 }

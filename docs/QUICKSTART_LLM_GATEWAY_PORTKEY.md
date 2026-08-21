@@ -28,8 +28,12 @@ or managed control plane. Obtain or configure these before the corresponding
 deployment step:
 
 - Portkey client-auth license, organization ID, Docker registry credentials, a
-  Portkey-supported gateway image tag pinned to a non-`latest` version, a
-  supported Helm chart version, and a patch-pinned Redis image tag;
+  supported Helm chart version, and approved gateway and Redis tag/digest
+  pairs. Reject moving gateway aliases such as `latest`, `edge`, and
+  `main-latest`; keep Redis patch-tagged. Each matching digest must use
+  `sha256:<64-lowercase-hex>`. The included `t4g.medium` nodes require a
+  multi-architecture index containing `linux/arm64` or a compatible
+  `linux/arm64` manifest;
 - worker-node/container-runtime access to the Docker Hub registry,
   authentication, and content endpoints used by the hard-coded
   `docker.io/portkeyai/gateway_enterprise` and `docker.io/redis` repositories,
@@ -64,10 +68,12 @@ deployment step:
   Playground, Prompt Studio, and Model Catalog test requests instead require a
   **Workspace User** API key with `completions.write`;
 - deployment identifiers that are unused or explicitly dedicated: the stack
-  name, namespace/gateway-service-account pair, and Helm release. A same-named
-  stack or release can be updated, and gateway service-account creation uses
-  `--override-existing-serviceaccounts`; the helper does not validate prior
-  ownership; and
+  name, namespace/gateway-service-account pair, and Helm release. The helper
+  never adopts a same-named gateway service account: it creates one only when
+  both it and its deterministic `eksctl` IAM stack are absent, and permits a
+  rerun only after verifying the existing pair. Partial, unmanaged, drifted,
+  or unreadable state fails before writes. A same-named stack or Helm release
+  can still be updated, so verify those owners separately; and
 - a distinct Portkey-assisted inbound PrivateLink endpoint-service flow when
   the managed control plane must reach the internal NLB for complete dashboard
   log visibility. Basic inference and local port-forward checks do not require
@@ -87,7 +93,8 @@ and existing cluster variation.
 
 1. Arrange the Enterprise entitlement, deployment artifacts, internet egress,
    private client route and resolver path, controlled hostname, issued
-   same-region ACM certificate, and corporate/VPN prefix list listed above.
+   same-region ACM certificate, corporate/VPN prefix list, and approved image
+   tag/digest pairs listed above.
    Defer the Model Catalog provider, provider slug, selected model, and
    inference API key until step 4, after the gateway IRSA role exists. Create
    the ignored environment file and populate the remaining settings, including
@@ -156,7 +163,7 @@ Codex
        -> gateway TCP :8787
      or validation: local kubectl port-forward /v1/responses
   -> Portkey Enterprise gateway on EKS
-     -> local Redis cache
+     -> local Redis cache (ClusterIP only)
      -> S3 request/response log store
      -> EKS IRSA service role
   -> bedrock-mantle.<BEDROCK_MANTLE_REGION>.api.aws
@@ -172,8 +179,11 @@ shell, filesystem, approvals, and sandbox.
 ## 1. Prerequisites
 
 - AWS CLI v1 or v2 credentials for a non-production AWS account;
-- `eksctl` 0.229.0 or newer, `kubectl`, Helm 3, Python 3, and Codex CLI. Exact
-  `eksctl` 0.229.0 is enforced at `cluster-deploy`'s pre-write gate and when
+- `eksctl` 0.229.0 or newer, `kubectl`, Helm 3, Python 3, and Codex CLI. CI and
+  the reference render test use Helm 3.21.4; Helm 4 changes `--post-renderer`
+  to plugin semantics and is unsupported by this executable-post-renderer
+  workflow. Exact `eksctl` 0.229.0 is enforced at `cluster-deploy`'s pre-write
+  gate and when
   `lbc-deploy` will create or update this workflow's walkthrough-managed
   controller IAM stack, whose CloudFormation shape is verified against that
   release. External-controller reuse and status/cleanup flows retain the
@@ -211,7 +221,11 @@ install -m 600 deployment/portkey/.env.deploy.example deployment/portkey/.env.de
 Never commit that file. The helper validates credential presence without
 printing values, refuses a group/world-readable environment file, does not
 blanket-export deployment secrets, and renders Helm secrets into a temporary
-mode-`0600` file.
+mode-`0600` file. Set `PORTKEY_GATEWAY_IMAGE_TAG` and
+`PORTKEY_GATEWAY_IMAGE_DIGEST` to the approved Portkey release pair, and set
+`PORTKEY_REDIS_IMAGE_TAG` and `PORTKEY_REDIS_IMAGE_DIGEST` to the approved
+Redis pair. Existing environment files without both digests fail before a Helm
+write.
 
 Set the two regions deliberately:
 
@@ -319,6 +333,15 @@ CloudFormation creates:
   projects in this account, and every model explicitly named in
   `PORTKEY_ALLOWED_MODELS`.
 
+Before OIDC association or CloudFormation mutation, the deployment checks the
+gateway service account and its deterministic `eksctl` IAM stack together. If
+both are absent, it creates them without an override/adoption flag and verifies
+the result. If both already exist, an idempotent project/model-policy rerun is
+allowed only after their stack metadata, IAM role and trust, attached managed
+policy, and Kubernetes annotation match this deployment. Any partial,
+unmanaged, drifted, or unreadable state stops before writes and names the
+collision to resolve.
+
 Start with `BEDROCK_MANTLE_PROJECT_ID=*`. After CloudTrail identifies the
 project, set its `proj_...` ID—or `default` when Mantle used the account default
 project—and deploy again to tighten the role.
@@ -328,9 +351,11 @@ silently deleting validation evidence.
 
 ## 4. Install the gateway
 
-The supplied values explicitly assign the Service to the AWS Load Balancer
-Controller and request an internal IPv4, IP-target NLB. Its only client
-listener is TLS on port 443 with
+The supplied values explicitly keep Redis behind a `ClusterIP` Service and
+assign only the gateway Service to the AWS Load Balancer Controller. The
+gateway requests an internal IPv4, IP-target NLB with
+`allocateLoadBalancerNodePorts: false`, so neither Service exposes a NodePort.
+Its only client listener is TLS on port 443 with
 `PORTKEY_NLB_TLS_CERTIFICATE_ARN`; it forwards TCP to gateway port 8787 and
 uses the gateway's HTTP `/v1/health` check on that target port. Frontend
 security-group access is limited to the customer-managed prefix lists in
@@ -348,9 +373,21 @@ CONFIRM_AWS_WRITE=1 make portkey-helm-deploy
 make portkey-status
 ```
 
-`helm-plan` rejects mutable `latest` image tags. Use versions supplied and
-supported by Portkey. The chart deploys the Enterprise gateway, built-in Redis,
-Kubernetes secrets, service account, and NLB service.
+`helm-plan` requires both approved tag/digest pairs, rejects moving gateway
+aliases, and renders the images as `repository:<tag>@<configured-digest>`.
+Kubernetes uses the digest as the content identity even if the registry later
+moves the tag. This pins content but does not verify a publisher signature or
+provenance. The workflow validates reference syntax but does not resolve
+private registry tags; obtain and approve each matching pair through Portkey or
+the organization's registry-promotion process. The chart deploys the
+Enterprise gateway, built-in Redis, Kubernetes secrets, service account, and
+NLB Service. The same checked-in post-renderer is used during plan and
+deployment to add the gateway allocation field that chart 1.7.7 does not
+expose.
+
+Roll back by restoring a previously approved gateway and Redis tag/digest pair
+and rerunning `make portkey-helm-deploy`. Do not select a Helm revision that
+predates digest enforcement.
 
 After deployment, obtain the NLB hostname from `make portkey-status`. Create a
 customer-owned private DNS record for `PORTKEY_GATEWAY_HOSTNAME` that targets
@@ -360,6 +397,16 @@ resolver path. The hostname must match the ACM certificate and the hostname in
 Route 53 record.
 
 ### Existing endpoint migration
+
+An existing TLS release may already have NodePorts allocated by chart defaults.
+The deployment first proves that the gateway is the expected single-port,
+IP-target `LoadBalancer` Service. With the normal write confirmation, it then
+sets `allocateLoadBalancerNodePorts: false` and removes the allocated gateway
+`nodePort` in one patch; IP targets continue to route directly to pods, so the
+NLB does not need replacement. Helm changes the built-in Redis Service to
+`ClusterIP`. Unexpected Service shape, target mode, read failure, or a
+remaining NodePort fails closed. This in-place cleanup is separate from the
+legacy plaintext endpoint replacement below.
 
 Treat a release created with the previous plaintext port-80 NLB as an explicit
 migration. Do not patch its Service, load-balancer scheme, listener, or security
@@ -549,6 +596,9 @@ Also verify manually:
   443, the expected ACM certificate and TLS policy, no plaintext port-80
   listener, healthy port-8787 targets, and frontend ingress only from the
   configured customer-managed prefix list;
+- the gateway is the only `LoadBalancer` Service, its
+  `allocateLoadBalancerNodePorts` field is `false`, Redis is `ClusterIP`, and
+  neither Service has a `nodePort`;
 - the controlled hostname resolves to that NLB over the intended private
   resolver path, an approved corporate/VPN client succeeds, and an unapproved
   routed client is rejected;
@@ -628,12 +678,11 @@ cleanup process; the command will not delete the orphan automatically. After
 an approved `eksctl` deletion, it also verifies that the IAM stack disappeared.
 
 The gateway cleanup targets the configured stack, Helm release, namespace, and
-gateway service-account names; unlike the controller cleanup above, it does not
-retrospectively prove that a pre-existing same-named resource belonged to this
-walkthrough. Deployment can update a same-named stack/release and uses
-`--override-existing-serviceaccounts` for the gateway service account. Run
-gateway cleanup only after confirming the exclusive-name prerequisite was
-honored, or after the original owner explicitly approves the impact.
+gateway service-account names. It refuses to remove an unreadable, partial,
+unmanaged, or drifted gateway service-account/`eksctl` stack pair. Resolve that
+state with its owner, and separately verify the CloudFormation stack and Helm
+release before cleanup because those names can still address pre-existing
+resources.
 
 The S3 log bucket is retained. Empty and delete it only after confirming the
 evidence and retention requirements. The ACM certificate, customer-managed

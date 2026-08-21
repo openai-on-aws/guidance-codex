@@ -24,6 +24,10 @@ jobs:
             deployment/litellm/jwt-middleware/requirements.txt
             deployment/litellm/jwt-middleware/tests/requirements.txt
 
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310
+        with:
+          version: v3.21.4
+
       - name: Install validation dependencies
         run: |
           python -m pip install --upgrade pip
