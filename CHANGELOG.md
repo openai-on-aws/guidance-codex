@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **GPT-5.6 and Bedrock Runtime support.** The LiteLLM gateway now routes Sol,
+  Terra, and Luna through the preferred `bedrock-runtime` Responses endpoint
+  using the Global cross-Region profile IDs
+  (`global.openai.gpt-5.6-*`). Native Codex and AgentCore examples retain their
+  current Mantle connector IDs until those built-in integrations support
+  Bedrock Runtime directly.
 - **Organizational attributes on OTEL metrics**, for grouping CloudWatch
   spend/usage by team, department, cost center, and so on:
   - Local sidecar (`deployment/templates/otel-local-config.yaml`) gains optional

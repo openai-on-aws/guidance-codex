@@ -11,7 +11,10 @@ def _load_wrapper():
     token_generator.provide_token.return_value = "test-token"
     sys.modules.setdefault("aws_bedrock_token_generator", token_generator)
 
-    wrapper_path = pathlib.Path(__file__).parents[2] / "run_litellm_with_bedrock_mantle_refresh.py"
+    wrapper_path = (
+        pathlib.Path(__file__).parents[2]
+        / "run_litellm_with_bedrock_token_refresh.py"
+    )
     spec = importlib.util.spec_from_file_location("gateway_runtime", wrapper_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

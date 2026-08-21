@@ -38,7 +38,7 @@ aws cloudformation deploy \
   --template-file deployment/infrastructure/bedrock-auth-idc.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides CreateChainedRole=false \
-  --region us-west-2
+  --region us-east-1
 ```
 
 Outputs include the customer-managed policy ARN and name to attach directly to
@@ -117,17 +117,17 @@ sso_registration_scopes = sso:account:access
 sso_session = codex-bedrock-sso
 sso_account_id = 123456789012
 sso_role_name = CodexBedrockUser
-region = us-west-2
+region = us-east-1
 ```
 
 **Codex configuration** — append to the user-level `~/.codex/config.toml`:
 
 ```toml
 model_provider = "amazon-bedrock"
-model = "openai.gpt-5.4"
+model = "openai.gpt-5.6-sol"
 
 [model_providers.amazon-bedrock.aws]
-region = "us-west-2"
+region = "us-east-1"
 profile = "codex-bedrock"
 ```
 
@@ -137,9 +137,10 @@ profile = "codex-bedrock"
 
 Keep provider settings in user-level `~/.codex/config.toml`; Codex ignores
 `model_provider` and `model_providers` in project-local `.codex/config.toml`
-files. This sample keeps `openai.gpt-5.4` so the `us-west-2` walkthrough works
-end to end. If you standardize on `us-east-2`, prefer `openai.gpt-5.5` to
-follow OpenAI's latest-model guidance for Codex.
+files. For GPT-5.6 applications, AWS recommends Bedrock Runtime whenever
+possible, where the equivalent US cross-Region profile ID is
+`us.openai.gpt-5.6-sol`. The current Codex `amazon-bedrock` provider still uses
+the Mantle ID shown above.
 
 For advanced Codex configuration (model parameters, sandbox modes, custom
 providers), see the
@@ -216,14 +217,14 @@ aws sts get-caller-identity --profile codex-bedrock
 # Expect: Arn: arn:aws:sts::<account>:assumed-role/AWSReservedSSO_CodexBedrockUser_.../<sso-user>
 
 aws bedrock-runtime converse \
-  --profile codex-bedrock --region us-west-2 \
-  --model-id openai.gpt-oss-120b-1:0 \
+  --profile codex-bedrock --region us-east-1 \
+  --model-id us.openai.gpt-5.6-sol \
   --messages '[{"role":"user","content":[{"text":"OK?"}]}]'
 ```
 
 If this succeeds, the IdC → Bedrock auth chain is working. The Codex
-`amazon-bedrock` provider routes through a mantle endpoint; set the `model`
-line in the installed `~/.codex/config.toml` to a mantle-served model to
+`amazon-bedrock` provider routes through a Mantle endpoint; set the `model`
+line in the installed `~/.codex/config.toml` to a Mantle-served model to
 round-trip from the Codex client — no auth or IAM changes are needed.
 
 ## CloudTrail attribution
@@ -265,9 +266,9 @@ developer's identity is baked into the sidecar config as the `user.id` /
 ### 1. Enable OTLP metric ingestion (one-time per account)
 
 ```bash
-aws cloudwatch start-otel-enrichment --region us-west-2
-aws observabilityadmin start-telemetry-enrichment --region us-west-2
-aws cloudwatch get-otel-enrichment --region us-west-2   # → {"Status": "Running"}
+aws cloudwatch start-otel-enrichment --region us-east-1
+aws observabilityadmin start-telemetry-enrichment --region us-east-1
+aws cloudwatch get-otel-enrichment --region us-east-1   # → {"Status": "Running"}
 ```
 
 Until both are enabled, the sidecar's exports are accepted but not stored.
@@ -275,7 +276,7 @@ Until both are enabled, the sidecar's exports are accepted but not stored.
 ### 2. Deploy the dashboard
 
 ```bash
-deployment/scripts/deploy-otel-stack.sh --region us-west-2
+deployment/scripts/deploy-otel-stack.sh --region us-east-1
 ```
 
 This deploys the `codex-otel-dashboard` stack: a single CloudWatch dashboard
@@ -287,7 +288,7 @@ Useful flags:
 
 | Flag | Purpose |
 |---|---|
-| `--region` | Region metrics are ingested in (default `us-west-2`). Must match the sidecar's `sigv4auth` region. |
+| `--region` | Region metrics are ingested in (default `us-east-1`). Must match the sidecar's `sigv4auth` region. |
 | `--stack-prefix` | Rename the dashboard stack (default `codex-otel`). |
 | `--dashboard-name` | CloudWatch dashboard name (default `CodexOnBedrock`). |
 
@@ -304,7 +305,7 @@ generator, then run the sidecar against the output:
 # Derives identity from the SSO session; --auto-lookup pulls org attributes
 # from the IdC identity store (needs sso-admin:ListInstances +
 # identitystore:DescribeUser on the calling role).
-deployment/scripts/generate-sidecar-config.sh --region us-west-2 --profile codex-bedrock --auto-lookup
+deployment/scripts/generate-sidecar-config.sh --region us-east-1 --profile codex-bedrock --auto-lookup
 
 otelcol-local-<platform> --config otel-local-config-<user>.yaml
 ```
@@ -433,7 +434,7 @@ aws sso-admin delete-permission-set ...
 
 # Remove the stack
 aws cloudformation delete-stack \
-  --stack-name codex-bedrock-idc --region us-west-2
+  --stack-name codex-bedrock-idc --region us-east-1
 ```
 
 ## References

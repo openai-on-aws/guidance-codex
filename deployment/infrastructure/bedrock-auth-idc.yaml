@@ -29,13 +29,13 @@ Parameters:
 
   AllowedBedrockRegions:
     Type: CommaDelimitedList
-    Default: 'us-east-1,us-west-2'
+    Default: 'us-east-1,us-east-2,us-west-2'
     Description: AWS regions where Bedrock InvokeModel is permitted.
 
   AllowedModelIdPattern:
     Type: String
     Default: '*'
-    Description: Bedrock model ID glob (e.g. "openai.gpt-5.*"). Default * allows all approved-access models.
+    Description: Foundation model ID glob. Cross-Region inference profiles are authorized separately. Default * allows all approved-access models.
 
   MantleProjectId:
     Type: String
@@ -65,7 +65,7 @@ Resources:
     Type: AWS::IAM::ManagedPolicy
     Properties:
       ManagedPolicyName: !Ref PolicyName
-      Description: Allow Codex clients to invoke approved Bedrock models (InvokeModel* and Mantle) in approved regions.
+      Description: Allow Codex clients to invoke approved Bedrock Runtime and Mantle models in approved regions.
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -78,6 +78,19 @@ Resources:
               - !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/${AllowedModelIdPattern}'
               - !Sub 'arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*'
               - !Sub 'arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:application-inference-profile/*'
+              - !Sub 'arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:project/default'
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref AllowedBedrockRegions
+          - Sid: ManageStoredRuntimeResponses
+            Effect: Allow
+            # Added with Bedrock Runtime Responses in August 2026. AWS Access
+            # Analyzer validates these actions; cfn-lint's IAM catalog may lag.
+            Action:
+              - bedrock:GetInvoke
+              - bedrock:CancelInvoke
+              - bedrock:DeleteInvoke
+            Resource: !Sub 'arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:project/default'
             Condition:
               StringEquals:
                 aws:RequestedRegion: !Ref AllowedBedrockRegions

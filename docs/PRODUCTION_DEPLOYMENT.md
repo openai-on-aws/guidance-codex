@@ -82,7 +82,6 @@ aws cloudformation deploy \
       EnableTls=true \
       DBMultiAz=true \
       AwsRegion="$BEDROCK_REGION" \
-      MantleProjectId=default \
       LiteLLMImage="$LITELLM_IMAGE" \
       AlbCertificateArn="$ALB_CERTIFICATE_ARN" \
       AlbDomainName="$GATEWAY_DOMAIN_NAME" \

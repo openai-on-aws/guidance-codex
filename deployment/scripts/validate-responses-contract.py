@@ -232,7 +232,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("GATEWAY_MODEL", "gpt-5.5"),
+        default=os.environ.get("GATEWAY_MODEL", "gpt-5.6-sol"),
     )
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument(

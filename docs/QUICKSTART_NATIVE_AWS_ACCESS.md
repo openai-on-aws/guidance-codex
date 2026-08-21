@@ -65,7 +65,7 @@ Corporate IdP (Okta/Azure) -> SAML -> IAM Identity Center -> AWS credentials -> 
 ### Required
 
 - [ ] AWS account with admin permissions (IAM, CloudFormation, Identity Center)
-- [ ] Amazon Bedrock activated in target region (e.g., `us-west-2`)
+- [ ] Amazon Bedrock activated in target region (e.g., `us-east-1`)
 - [ ] AWS CLI v2 installed ([download](https://aws.amazon.com/cli/))
 - [ ] Identity provider with SAML 2.0 support (Okta, Azure AD, Auth0, Google Workspace)
 - [ ] [Codex CLI](https://developers.openai.com/codex/cli) installed locally
@@ -96,7 +96,7 @@ cd guidance-codex
 
 ```bash
 # Set deployment variables
-AWS_REGION=us-west-2                          # Bedrock region
+AWS_REGION=us-east-1                          # Bedrock region
 STACK_NAME=codex-bedrock-idc
 TEMPLATE_FILE=deployment/infrastructure/bedrock-auth-idc.yaml
 
@@ -109,7 +109,7 @@ aws cloudformation deploy \
   --parameter-overrides \
       PolicyName=CodexBedrockInvokePolicy \
       CreateChainedRole=false \
-      AllowedBedrockRegions='us-east-1,us-west-2' \
+      AllowedBedrockRegions='us-east-1,us-east-2,us-west-2' \
       AllowedModelIdPattern='*' \
       MaxSessionDurationSeconds=28800
 
@@ -127,7 +127,8 @@ aws cloudformation describe-stacks \
 
 **Stack creates:**
 - IAM managed policy: `CodexBedrockInvokePolicy`
-- Scoped classic Bedrock and Bedrock Mantle inference permissions
+- Bedrock Runtime inference-profile/default-project permissions plus the Mantle
+  actions used by Codex's current built-in provider
 - Optional chained role only when `CreateChainedRole=true`
 
 #### Step 3: Create the Permission Set in IAM Identity Center
@@ -285,7 +286,7 @@ sso_registration_scopes = sso:account:access
 sso_session = codex-bedrock-sso
 sso_account_id = 123456789012
 sso_role_name = CodexBedrockUser
-region = us-west-2
+region = us-east-1
 ```
 
 ### Codex Configuration (`~/.codex/config.toml`)
@@ -297,10 +298,10 @@ must match the `[profile ...]` name in `~/.aws/config`.
 
 ```toml
 model_provider = "amazon-bedrock"
-model = "openai.gpt-5.4"
+model = "openai.gpt-5.6-sol"
 
 [model_providers.amazon-bedrock.aws]
-region = "us-west-2"
+region = "us-east-1"
 profile = "codex-bedrock"
 ```
 
@@ -309,10 +310,11 @@ profile = "codex-bedrock"
 > region that serves your model; see
 > [reference-regions.md](reference-regions.md) for how to check availability.
 
-This guide keeps `openai.gpt-5.4` in the sample because the walkthrough uses
-`us-west-2`. OpenAI recommends the latest GPT-5 family model for Codex, so if
-you deploy in `us-east-2`, switch the snippet to `model = "openai.gpt-5.5"`
-and update the Bedrock region to match.
+For GPT-5.6 applications, AWS recommends Bedrock Runtime whenever possible,
+where this model's US cross-Region profile ID is
+`us.openai.gpt-5.6-sol`. The current Codex `amazon-bedrock` provider still
+targets Mantle, so its model setting uses the Mantle ID
+`openai.gpt-5.6-sol`. The IAM policy deployed above supports both paths.
 
 For advanced Codex configuration options (model parameters, sandbox modes, custom providers), see the [OpenAI Codex configuration reference](https://developers.openai.com/codex/config-advanced).
 
@@ -395,16 +397,12 @@ aws configure export-credentials --profile codex-bedrock --format process | jq
 #   "Expiration": "2026-05-30T18:30:00Z"
 # }
 
-# 3. Test Bedrock access directly (uses gpt-oss-20b via standard InvokeModel to confirm IAM is wired up)
-aws bedrock-runtime invoke-model \
-  --model-id openai.gpt-oss-20b-1:0 \
-  --cli-binary-format raw-in-base64-out \
-  --body '{"messages":[{"role":"user","content":"Hello"}],"max_tokens":10}' \
-  --region us-west-2 \
-  --profile codex-bedrock \
-  output.json
-
-cat output.json | jq
+# 3. Test the preferred Bedrock Runtime path directly.
+aws bedrock-runtime converse \
+  --model-id us.openai.gpt-5.6-sol \
+  --messages '[{"role":"user","content":[{"text":"Reply with OK"}]}]' \
+  --region us-east-1 \
+  --profile codex-bedrock
 ```
 
 ### Test Codex Integration
@@ -415,17 +413,16 @@ grep -A6 "model_provider" ~/.codex/config.toml
 
 # Expected:
 # model_provider = "amazon-bedrock"
-# model = "openai.gpt-5.4"
+# model = "openai.gpt-5.6-sol"
 # 
 # [model_providers.amazon-bedrock.aws]
-# region = "us-west-2"
+# region = "us-east-1"
 # profile = "codex-bedrock"
 
 # 2. Run a Codex test prompt
 codex exec --skip-git-repo-check --sandbox read-only "Write a hello world function in Python"
 
-# Expected: Codex generates Python code using Bedrock
-# Note: gpt-oss models emit a reasoning trace before the answer — this is expected.
+# Expected: Codex generates Python code using GPT-5.6 Sol on Bedrock.
 ```
 
 ---
@@ -448,10 +445,10 @@ CloudWatch native OTLP metric ingestion is off by default. Enable it once per
 account (metrics are accepted but silently not stored until both are on):
 
 ```bash
-aws cloudwatch start-otel-enrichment --region us-west-2
-aws observabilityadmin start-telemetry-enrichment --region us-west-2
+aws cloudwatch start-otel-enrichment --region us-east-1
+aws observabilityadmin start-telemetry-enrichment --region us-east-1
 # verify:
-aws cloudwatch get-otel-enrichment --region us-west-2   # → {"Status": "Running"}
+aws cloudwatch get-otel-enrichment --region us-east-1   # → {"Status": "Running"}
 ```
 
 This enables per-GB OTLP metric ingestion billing. OTLP metrics are stored
@@ -460,7 +457,7 @@ separately from classic CloudWatch metrics and are queried with PromQL.
 ### Step 1: Deploy the dashboard
 
 ```bash
-AWS_REGION=us-west-2
+AWS_REGION=us-east-1
 
 # Deploys ONLY the CloudWatch dashboard (no networking/collector stacks).
 deployment/scripts/deploy-otel-stack.sh --region "$AWS_REGION"
@@ -480,13 +477,13 @@ can pull org attributes straight from IAM Identity Center:
 
 ```bash
 # Identity only (auto-derived from the SSO session)
-deployment/scripts/generate-sidecar-config.sh --region us-west-2 --profile codex-bedrock
+deployment/scripts/generate-sidecar-config.sh --region us-east-1 --profile codex-bedrock
 
 # Recommended: auto-populate org attributes from the IdC identity store
-deployment/scripts/generate-sidecar-config.sh --region us-west-2 --profile codex-bedrock --auto-lookup
+deployment/scripts/generate-sidecar-config.sh --region us-east-1 --profile codex-bedrock --auto-lookup
 
 # Or supply org attributes explicitly (override / no IdC lookup)
-deployment/scripts/generate-sidecar-config.sh --region us-west-2 \
+deployment/scripts/generate-sidecar-config.sh --region us-east-1 \
   --department Engineering --team platform --cost-center CC-9001
 ```
 
@@ -640,8 +637,8 @@ See [operate-troubleshooting.md](operate-troubleshooting.md)
 #    Sidecar model: stop the per-developer collector and delete the dashboard
 #    stack. There is no ECS/ALB/networking stack to remove on this path.
 #    - On each developer machine: stop the local otelcol-local-<platform> process.
-aws cloudformation delete-stack --stack-name codex-otel-dashboard --region us-west-2
-aws cloudformation wait stack-delete-complete --stack-name codex-otel-dashboard --region us-west-2
+aws cloudformation delete-stack --stack-name codex-otel-dashboard --region us-east-1
+aws cloudformation wait stack-delete-complete --stack-name codex-otel-dashboard --region us-east-1
 
 # 3. Admin removes the permission set
 #    Account assignments must be deleted before the permission set can be removed.
@@ -673,15 +670,13 @@ aws sso-admin delete-permission-set \
   --region us-east-1
 
 # 4. Admin deletes the Bedrock auth stack
-#    Note: the auth stack lives in the Bedrock region (us-west-2, the
-#    AWS_REGION used at deploy time), NOT us-east-1. us-east-1 is only the
-#    IdC home region used for the sso-admin commands above.
+#    This walkthrough deploys the auth stack and IdC in us-east-1.
 aws cloudformation delete-stack \
   --stack-name codex-bedrock-idc \
-  --region us-west-2
+  --region us-east-1
 aws cloudformation wait stack-delete-complete \
   --stack-name codex-bedrock-idc \
-  --region us-west-2
+  --region us-east-1
 ```
 
 ---

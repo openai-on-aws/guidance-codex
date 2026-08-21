@@ -4,11 +4,12 @@ This repository does not maintain a hard-coded Bedrock region × model matrix.
 Availability changes over time, can differ by account, and should be verified
 against current AWS documentation and your own AWS account.
 
-OpenAI recommends the latest GPT-5 family model for Codex. In practice, prefer
-`openai.gpt-5.5` when your Bedrock region and account support it, and use
-`openai.gpt-5.4` when you need a fallback. The custom-provider examples in this
-repo keep `wire_api = "responses"` explicit for clarity, although Responses is
-already the default for Codex custom providers.
+For GPT-5.6 applications, AWS recommends the `bedrock-runtime` endpoint whenever
+possible. GPT-5.6 uses cross-Region inference profile IDs there. The LiteLLM
+sample defaults to `global.openai.gpt-5.6-sol`,
+`global.openai.gpt-5.6-terra`, and `global.openai.gpt-5.6-luna`. Use the
+equivalent `us.` profiles when US data residency is required and they pass
+validation from the chosen source region.
 
 ## Source of truth
 
@@ -18,22 +19,26 @@ already the default for Codex custom providers.
 
 ## Endpoints
 
-- **Mantle (OpenAI-compatible API):** `bedrock-mantle.<region>.api.aws/openai/v1` — serves GPT-5.4, GPT-5.5, and GPT-OSS models. The LiteLLM Gateway uses LiteLLM's `bedrock_mantle/<model>` provider and keeps Codex traffic on the OpenAI-compatible Responses path.
+- **Bedrock Runtime (preferred):** `bedrock-runtime.<region>.amazonaws.com/openai/v1`
+  supports Responses, Chat Completions, and Converse for GPT-5.6. The LiteLLM
+  gateway uses this endpoint with Global cross-Region profile IDs.
+- **Mantle (compatibility):** `bedrock-mantle.<region>.api.aws/openai/v1`
+  remains the endpoint used by Codex's built-in `amazon-bedrock` provider and
+  AgentCore's built-in `bedrock-mantle` connector.
 
-> **Note:** The LiteLLM gateway sample in this repo resolves the Mantle
-> endpoint from the gateway's selected Bedrock region. The same image can target
-> any region that serves your model, as long as the gateway mints the bearer
-> token and calls the Mantle endpoint in that same region.
+The Runtime Responses API requires an inference profile rather than the
+foundation model ID. Creating a response also requires `bedrock:InvokeModel`
+on the account's `project/default` resource.
 
-Under the hood, Mantle authenticates with a Bearer token
+The OpenAI-compatible Runtime endpoint authenticates with a Bearer token
 (`Authorization: Bearer <key>`). The LiteLLM gateway sample in this repo now
 refreshes `AWS_BEARER_TOKEN_BEDROCK` automatically from the gateway's AWS
 credentials using the official `aws-bedrock-token-generator` package. For
 direct manual API testing, you can still generate a short-term key (12h) from
 your IAM credentials:
 ```bash
-pip install aws-bedrock-token-generator
-python -c "from aws_bedrock_token_generator import provide_token; print(provide_token())"
+uv run --with aws-bedrock-token-generator \
+  python -c "from aws_bedrock_token_generator import provide_token; print(provide_token())"
 ```
 
 ## How to verify availability
@@ -42,9 +47,9 @@ python -c "from aws_bedrock_token_generator import provide_token; print(provide_
 2. Verify the model appears in your account for the target region:
 
 ```bash
-aws bedrock list-foundation-models \
+aws bedrock list-inference-profiles \
   --region <region> \
-  --query "modelSummaries[?contains(modelId,'openai')].modelId" \
+  --query "inferenceProfileSummaries[?contains(inferenceProfileId,'openai.gpt-5.6')].inferenceProfileId" \
   --output text
 ```
 
@@ -55,7 +60,7 @@ for the account in that region. Request access in the **Amazon Bedrock** →
 ## Quotas
 
 Per-account Bedrock invoke quotas apply. Check the Service Quotas console under
-**Amazon Bedrock** and filter by the specific model ID.
+**Amazon Bedrock** and filter by the specific inference profile.
 
 For live dashboards of quota consumption, see `operate-monitoring.md` ("Quota
 monitoring" section).

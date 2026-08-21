@@ -12,7 +12,7 @@ A gateway is ready for a Codex rollout only when it:
 1. Implements `POST /v1/responses` and streaming Responses events.
 2. Preserves `reasoning`, `text`, `prompt_cache_key`, and
    `previous_response_id` instead of translating them to a reduced chat schema.
-3. Refreshes Bedrock Mantle credentials server-side.
+3. Refreshes Bedrock credentials server-side.
 4. Authenticates each developer and records a stable user or team identity.
 5. Enforces the customer's RPM, TPM, model, and spend policy.
 6. Exports redacted audit events without storing prompts by default.
@@ -23,7 +23,7 @@ environment:
 ```bash
 export GATEWAY_BASE_URL=https://gateway.example.com/v1
 export GATEWAY_API_KEY=<test-identity-key>
-export GATEWAY_MODEL=gpt-5.5
+export GATEWAY_MODEL=gpt-5.6-sol
 
 python3 deployment/scripts/validate-responses-contract.py \
   --include-tool-call
@@ -40,7 +40,7 @@ customer's retention policy.
 | Capability | LiteLLM reference | Portkey evaluation |
 |------------|-------------------|--------------------|
 | Responses endpoint | Live contract probe passed in `us-east-1` | Documented by Portkey; strict live probe requires a workspace key |
-| Bedrock Mantle GPT-5.x | Configured with `bedrock_mantle/` and server-side token refresh | Not verified by this repository; do not infer Mantle support from classic Bedrock support |
+| Bedrock Runtime GPT-5.6 | Configured with Global cross-Region profiles and server-side token refresh | Require the vendor to identify the exact Runtime API and inference profile |
 | Classic Bedrock assumed role | ECS task role | Documented Portkey integration pattern |
 | OIDC/JWT | Included middleware; compare licensed LiteLLM features against current vendor terms | Verify Portkey workspace/service-account controls for the selected tier |
 | Per-user/team budgets | Vendor documented; prove blocking with customer policy | Vendor documented; prove blocking with customer policy |
@@ -59,22 +59,23 @@ ECS/RDS operations, and values an inspectable reference implementation.
 The deployable path is:
 
 ```text
-Codex -> ALB/WAF -> JWT middleware -> LiteLLM -> Bedrock Mantle
+Codex -> ALB/WAF -> JWT middleware -> LiteLLM -> Bedrock Runtime
                             |              |
                          DynamoDB       PostgreSQL
 ```
 
 Use immutable image digests for both containers. The ECS task role is scoped
-to one region and Mantle project. RDS generates its password in Secrets
-Manager; the password is injected into the container and never rendered in the
-task definition. For native LiteLLM Enterprise JWT support, remove the custom
-middleware only after reproducing the same issuer, audience, key-rotation,
-identity, and readiness tests.
+to the Bedrock Runtime inference and default-project resources needed by the
+gateway. RDS generates its password in Secrets Manager; the password is
+injected into the container and never rendered in the task definition. For
+native LiteLLM Enterprise JWT support, remove the custom middleware only after
+reproducing the same issuer, audience, key-rotation, identity, and readiness
+tests.
 
 Developer configuration belongs in user-level `~/.codex/config.toml`:
 
 ```toml
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 model_provider = "enterprise-gateway"
 
 [model_providers.enterprise-gateway]
@@ -99,9 +100,9 @@ Start with a non-production workspace and one test identity. Portkey's current
 Model Catalog replaces the older virtual-key-first flow. Configure an AWS
 role with an external ID and only the provider actions and resources required
 by the selected route. Portkey's classic Bedrock assumed-role guidance is not
-evidence that Bedrock Mantle's Responses endpoint is supported. Require Portkey
-to identify the exact upstream API, IAM actions, region, model identifier,
-credential refresh behavior, and data path in the customer design.
+evidence that the GPT-5.6 Bedrock Runtime Responses path is supported. Require
+Portkey to identify the exact upstream API, IAM actions, region, inference
+profile, credential refresh behavior, and data path in the customer design.
 
 A Portkey evaluation can use Codex custom-provider bearer authentication:
 

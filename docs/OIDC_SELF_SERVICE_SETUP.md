@@ -167,7 +167,7 @@ curl https://<gateway-url>/v1/responses \
   -H "Authorization: Bearer $JWT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gpt-5.5",
+    "model": "gpt-5.6-sol",
     "input": "Hello!"
   }'
 

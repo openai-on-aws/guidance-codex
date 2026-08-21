@@ -103,8 +103,8 @@ the full set, including `AllowedPattern` and default values.
 | `RoleName`                   | String             | `CodexBedrockIdCRole`     | Name of the optional chained IAM role. |
 | `PolicyName`                 | String             | `CodexBedrockInvokePolicy`| Customer-managed policy name. |
 | `PermissionSetNamePattern`   | String             | `CodexBedrockUser_*`      | Glob matched against `AWSReservedSSO_<PermissionSetName>_<hash>`. |
-| `AllowedBedrockRegions`      | CommaDelimitedList | `us-east-1,us-west-2`     | Regions where `bedrock:InvokeModel*` is allowed. |
-| `AllowedModelIdPattern`      | String             | `*`                       | Bedrock model ID glob (e.g. `openai.gpt-5.*`). |
+| `AllowedBedrockRegions`      | CommaDelimitedList | `us-east-1,us-east-2,us-west-2` | Regions where Bedrock inference is allowed. |
+| `AllowedModelIdPattern`      | String             | `*`                       | Foundation model ID glob; cross-Region inference profiles are authorized separately. |
 | `MantleProjectId`            | String             | `default`                 | Mantle project allowed for Responses inference. |
 | `MaxSessionDurationSeconds`  | Number             | `28800`                   | 3600–43200; raise for long Codex runs. |
 
@@ -140,8 +140,7 @@ Outputs (all exported): `VpcId`, `PublicSubnet1`, `PublicSubnet2`,
 | `LiteLLMMasterKey`         | String  | `''`                       | Optional `NoEcho` override; blank generates the key in Secrets Manager. |
 | `DBUsername`               | String  | `litellm`                  | RDS username. RDS generates the password in Secrets Manager. |
 | `DBMultiAz`                | String  | `true`                     | Keep `true` for production; `false` is suitable for a disposable walkthrough. |
-| `AwsRegion`                | String  | `us-east-1`                | Bedrock region for upstream calls. |
-| `MantleProjectId`          | String  | `default`                  | Mantle project allowed by the task role. |
+| `AwsRegion`                | String  | `us-east-1`                | Source region for Bedrock Runtime calls through the Global cross-Region GPT-5.6 profiles. |
 | `LiteLLMImage`             | String  | —                          | Required immutable ECR digest. |
 | `AllowedCidr`              | String  | `10.0.0.0/8`               | ALB ingress CIDR. **Never** `0.0.0.0/0`. |
 | `EnableTls`                | String  | `true`                     | Keep `true` outside a short-lived, CIDR-restricted walkthrough. |
@@ -178,8 +177,8 @@ aws cloudformation deploy \
   --parameter-overrides \
       RoleName=CodexBedrockIdCRole \
       CreateChainedRole=false \
-      AllowedBedrockRegions=us-east-1,us-west-2 \
-      AllowedModelIdPattern='openai.gpt-5.*'
+      AllowedBedrockRegions=us-east-1,us-east-2,us-west-2 \
+      AllowedModelIdPattern='*'
 
 aws cloudformation describe-stacks \
   --stack-name codex-bedrock-idc \

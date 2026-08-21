@@ -20,7 +20,7 @@ priorities on the two axes that matter: *managed-vs-self-run ops* and
 | **IAM Identity Center Required?** | ✅ Yes | ❌ No | ❌ No |
 | **Path to Bedrock** | Codex → Bedrock (native AWS SDK) | Codex → managed gateway → Bedrock | Codex → self-run gateway → Bedrock |
 | **Infra you operate** | None | None (managed/serverless) | ECS + RDS + ALB |
-| **GPT-5.x via Bedrock Mantle** | ✅ Native | ✅ Built-in `bedrock-mantle` connector | ✅ Custom config |
+| **GPT-5.6 endpoint** | Mantle (current Codex connector) | Mantle (built-in connector) | Bedrock Runtime (preferred) |
 | **Developer Command** | `aws sso login` | `export AGENTCORE_TOKEN=<oidc-jwt>` | `codex` with a key or token resolver |
 | **Per-user Bedrock CloudTrail / CUR** | ✅ Native | ❌ Gateway role only | ❌ Gateway role only |
 | **Soft Alerts (CloudWatch)** | Optional | ✅ `AWS/BedrockMantle` metrics | Optional |
@@ -33,8 +33,10 @@ priorities on the two axes that matter: *managed-vs-self-run ops* and
 | **Operational ownership** | AWS identity configuration | AWS managed | Customer-operated ECS, RDS, and ALB |
 | **Cost model** | AWS identity and model usage | Managed service and model usage | Infrastructure, operations, and model usage |
 
-> Model availability is region-bound — `gpt-5.5` (us-east-1 / us-east-2), `gpt-5.4`
-> also in us-west-2; the AgentCore web search connector is us-east-1 only. See
+> Bedrock Runtime uses `us.openai.gpt-5.6-*` or
+> `global.openai.gpt-5.6-*` cross-Region profiles. Mantle availability remains
+> region-bound for the Native and AgentCore connectors. The AgentCore web search
+> connector is us-east-1 only. See
 > [reference-regions.md](reference-regions.md).
 
 > **AgentCore Gateway auth:** create the
@@ -106,7 +108,7 @@ governance. All of the following must apply:
 - [ ] Your AWS CLI / SDK is recent enough to expose AgentCore *inference* targets
       (botocore/boto3 ≥ 1.43.33; older SDKs only show mcp/http targets).
 - [ ] Amazon Bedrock Mantle access for GPT-5.x in the target region
-      (us-east-1 / us-east-2; `gpt-5.5` is not in us-west-2 — see
+      (us-east-1 / us-east-2 for `gpt-5.6-sol`; see
       [reference-regions.md](reference-regions.md)).
 
 **Reference implementation:** CloudFormation templates in

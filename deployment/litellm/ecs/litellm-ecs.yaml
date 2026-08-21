@@ -91,12 +91,6 @@ Parameters:
     Default: us-east-1
     Description: Amazon Bedrock region for upstream model calls. The tested walkthrough uses us-east-1.
 
-  MantleProjectId:
-    Type: String
-    Default: default
-    AllowedPattern: "[A-Za-z0-9._-]+"
-    Description: Bedrock Mantle project ID that the task role can invoke.
-
   LiteLLMImage:
     Type: String
     AllowedPattern: ".+@sha256:[a-f0-9]{64}"
@@ -445,24 +439,28 @@ Resources:
         Statement:
           - Effect: Allow
             Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+            Resource:
+              - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
+              - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"
+              - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:application-inference-profile/*"
+              - !Sub "arn:${AWS::Partition}:bedrock:${AwsRegion}:${AWS::AccountId}:project/default"
+          - Effect: Allow
+            Action:
               - bedrock:CallWithBearerToken
             Resource: "*"
             Condition:
               StringEquals:
                 aws:RequestedRegion: !Ref AwsRegion
-          # GPT-5.x on Bedrock Mantle is a separate service namespace
-          # (bedrock-mantle). The /openai/v1/responses path maps to the
-          # bedrock-mantle:CreateInference action on the default project.
           - Effect: Allow
+            # Added with Bedrock Runtime Responses in August 2026. AWS Access
+            # Analyzer validates these actions; cfn-lint's IAM catalog may lag.
             Action:
-              - bedrock-mantle:CreateInference
-              - bedrock-mantle:GetInference
-              - bedrock-mantle:CancelInference
-            Resource: !Sub "arn:${AWS::Partition}:bedrock-mantle:${AwsRegion}:${AWS::AccountId}:project/${MantleProjectId}"
-          - Effect: Allow
-            Action:
-              - bedrock-mantle:CallWithBearerToken
-            Resource: "*"
+              - bedrock:GetInvoke
+              - bedrock:CancelInvoke
+              - bedrock:DeleteInvoke
+            Resource: !Sub "arn:${AWS::Partition}:bedrock:${AwsRegion}:${AWS::AccountId}:project/default"
             Condition:
               StringEquals:
                 aws:RequestedRegion: !Ref AwsRegion
@@ -797,8 +795,10 @@ Resources:
               Value: !Ref AwsRegion
             - Name: AWS_DEFAULT_REGION
               Value: !Ref AwsRegion
-            - Name: BEDROCK_MANTLE_REGION
+            - Name: BEDROCK_RUNTIME_REGION
               Value: !Ref AwsRegion
+            - Name: BEDROCK_RUNTIME_BASE_URL
+              Value: !Sub "https://bedrock-runtime.${AwsRegion}.amazonaws.com/openai/v1"
             - Name: DB_HOST
               Value: !GetAtt RDSInstance.Endpoint.Address
             - Name: DB_PORT

@@ -133,7 +133,7 @@ The Codex `~/.codex/config.toml` points at the **Codex-facing** profile. Set
 
 ```toml
 model_provider = "amazon-bedrock"
-model = "openai.gpt-5.4"
+model = "openai.gpt-5.6-sol"
 
 [model_providers.amazon-bedrock.aws]
 region = "us-east-1"
@@ -142,6 +142,8 @@ profile = "codex-bedrock"
 
 > The built-in `amazon-bedrock` provider reads `aws.profile` and `aws.region`
 > from this block — keep it to those two keys so Codex starts cleanly.
+> For GPT-5.6 applications, AWS recommends Bedrock Runtime whenever possible,
+> but the current Codex provider uses the Mantle-form ID shown here.
 
 ### Headless / SSH / CI hosts
 

@@ -12,6 +12,11 @@ This is the managed counterpart to the self-hosted
 AWS runs the infrastructure and `bedrock-mantle` (GPT-5.x via the Responses API)
 is a built-in connector.
 
+> For GPT-5.6 applications, AWS recommends `bedrock-runtime` whenever possible.
+> This managed pattern remains on Mantle because AgentCore Gateway currently exposes
+> `bedrock-mantle` as its built-in Bedrock inference connector. Use the LiteLLM
+> pattern when Bedrock Runtime is a requirement.
+
 **What you get:**
 - A managed, serverless endpoint — no containers, database, or load balancer to operate
 - Built-in `bedrock-mantle`, `openai`, and `anthropic` connectors with model-based routing
@@ -62,7 +67,7 @@ On this path a `codex exec` turn reaches the gateway with only
 - AWS account with permissions for `bedrock-agentcore`, IAM, and Bedrock, with AWS
   credentials available in your shell.
 - Amazon Bedrock **Mantle** access for GPT-5.x in the target region
-  (`us-east-1` / `us-east-2`; `gpt-5.5` is **not** in `us-west-2` — see
+  (`us-east-1` / `us-east-2` for `gpt-5.6-sol`; see
   [reference-regions.md](reference-regions.md))
 - AWS CLI v2 authenticated, **and** botocore/boto3 ≥ 1.43.33 — the AgentCore
   *inference target* shape was added in that release; older SDKs only expose
@@ -165,7 +170,7 @@ export AGENTCORE_TOKEN=$(curl -s -X POST \
 Then, in `~/.codex/config.toml`:
 
 ```toml
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 model_provider = "agentcore-gateway"
 
 [model_providers.agentcore-gateway]
@@ -329,12 +334,12 @@ or rotate, because the developer has no AWS identity. Two patterns:
 ## Verify telemetry
 
 GPT-5.x calls routed through the gateway land in CloudWatch namespace
-**`AWS/BedrockMantle`**, keyed by `Model=openai.gpt-5.5` and `Project=default`:
+**`AWS/BedrockMantle`**, keyed by `Model=openai.gpt-5.6-sol` and `Project=default`:
 
 ```bash
 aws cloudwatch get-metric-statistics --region us-east-1 \
   --namespace AWS/BedrockMantle --metric-name Inferences \
-  --dimensions Name=Model,Value=openai.gpt-5.5 Name=Project,Value=default \
+  --dimensions Name=Model,Value=openai.gpt-5.6-sol Name=Project,Value=default \
   --start-time "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" \
   --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --period 3600 --statistics Sum
@@ -418,7 +423,7 @@ provider:
 
 ```toml
 # --- model provider: needs AWS credentials in your env for SigV4 ---
-model = "openai.gpt-5.5"
+model = "openai.gpt-5.6-sol"
 model_provider = "amazon-bedrock"
 
 [model_providers.amazon-bedrock.aws]

@@ -20,14 +20,15 @@ regardless of how you deployed.
 
 ### Model ID returns 404 / `ResourceNotFoundException`
 - **Likely cause:** the model ID in `~/.codex/config.toml` (or gateway
-  `litellm_config.yaml`) is not available in the target region, or it is
-  only served through the mantle endpoint (GPT-5.4 / GPT-5.5) and you are calling
-  standard Converse, or vice versa.
-- **Fix:** verify the model ID against current AWS Bedrock docs and confirm it
-  appears in `aws bedrock list-foundation-models --region <region>` as
-  described in [reference-regions.md](reference-regions.md). `openai.gpt-oss-120b-1:0`
-  and similar models use standard Converse; `gpt-5.4` / `gpt-5.5` use the mantle
-  endpoint.
+  `litellm_config.yaml`) does not match the endpoint. Bedrock Runtime requires
+  a cross-Region profile such as `us.openai.gpt-5.6-sol`; Mantle uses
+  `openai.gpt-5.6-sol`.
+- **Fix:** for Bedrock Runtime, confirm the profile appears in
+  `aws bedrock list-inference-profiles --region <region>` as described in
+  [reference-regions.md](reference-regions.md), and confirm the caller has
+  `bedrock:InvokeModel` on both the inference profile and `project/default`.
+  For Mantle, verify the unprefixed model ID and regional access against the
+  model card.
 
 ### CloudTrail `userIdentity.principalId` shows assumed-role ARN, not SSO username
 - **Expected.** The SSO username is in `userIdentity.onBehalfOf` or is

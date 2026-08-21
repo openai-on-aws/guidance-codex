@@ -288,12 +288,12 @@ Some enterprise browser controls also block raw HTTP ALB URLs; use trusted DNS,
 ACM, and the HTTPS listener on port 443 for customer deployments. Never expose
 the ECS task port 4000 or PostgreSQL port 5432 publicly.
 
-The bundled LiteLLM image now uses LiteLLM's documented
-`bedrock_mantle/openai.gpt-5.x` provider and refreshes
-`AWS_BEARER_TOKEN_BEDROCK` in-process from the gateway task role using the
-official `aws-bedrock-token-generator` package. That matches OpenAI's Bedrock
-guidance for long-running applications: use a token provider rather than
-manually injecting a static 12-hour bearer token.
+The bundled LiteLLM image routes its OpenAI-compatible Responses traffic to
+`https://bedrock-runtime.<region>.amazonaws.com/openai/v1` and uses the Global
+cross-Region GPT-5.6 profile IDs. It refreshes `AWS_BEARER_TOKEN_BEDROCK`
+in-process from the gateway task role using the official
+`aws-bedrock-token-generator` package, rather than injecting a static bearer
+token.
 
 With `Route53HostedZoneId`, CloudFormation creates and DNS-validates the ACM
 certificate and creates the ALB alias record. With `AlbCertificateArn`, the
@@ -313,7 +313,7 @@ workflow.
 CODEX_API_SECRET_ID=codex-litellm-gateway/alice-key
 CODEX_KEY_ALIAS=alice@company.com
 CODEX_KEY_USER_ID=alice@company.com
-CODEX_KEY_MODELS=gpt-5.5
+CODEX_KEY_MODELS=gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna
 CODEX_KEY_MAX_BUDGET=50
 CODEX_KEY_BUDGET_DURATION=30d
 CODEX_KEY_TPM_LIMIT=100000
@@ -336,8 +336,8 @@ Developers add this to the user-level `~/.codex/config.toml`:
 
 ```toml
 model_provider = "litellm-gateway"
-model = "gpt-5.5"         # Walkthrough model; verify account and Region availability
-web_search = "disabled"   # Bedrock Mantle does not accept the hosted web_search tool type
+model = "gpt-5.6-sol"     # Preferred Codex model when available
+web_search = "disabled"   # This gateway does not forward Codex's hosted web_search tool
 
 [model_providers.litellm-gateway]
 name = "LiteLLM Gateway"
@@ -352,12 +352,15 @@ refresh_interval_ms = 300000
 ```
 
 `make litellm-codex-config` prints this block with the deployed endpoint,
-helper path, AWS CLI path, and scoped-key secret ID filled in. Bedrock Mantle serves GPT-5.x
-through the Responses API, so `wire_api = "responses"` is the right setting
-here. Keep this provider block in user-level `~/.codex/config.toml`; Codex
-ignores provider and auth settings in project-local `.codex/config.toml`.
-For customer rollout, replace the deployment profile with a developer profile
-that can read only this scoped-key secret and decrypt it with the stack KMS key.
+helper path, AWS CLI path, and scoped-key secret ID filled in. The gateway
+accepts the Responses API from Codex and forwards it to Bedrock Runtime's
+OpenAI-compatible Responses endpoint. Codex custom providers already default to
+Responses; this guide keeps `wire_api = "responses"` explicit.
+`web_search = "disabled"` applies to this gateway path, not to Bedrock Runtime
+generally. Keep this provider block in user-level `~/.codex/config.toml`; Codex
+ignores provider and auth settings in project-local `.codex/config.toml`. For
+customer rollout, replace the deployment profile with a developer profile that
+can read only this scoped-key secret and decrypt it with the stack KMS key.
 
 Test:
 
@@ -539,15 +542,14 @@ add `-k` for this low-level smoke test.
 
 ### Request to a specific model hangs, then returns 504 Gateway Time-out
 
-**Cause:** The requested model is not served by Bedrock Mantle in your region or
-is not enabled for your account. The upstream call never returns and the ALB
-closes the connection at its idle timeout (~60s). In testing, `gpt-5.5`
-returned normally while `gpt-5.4` timed out in the same region/account.
+**Cause:** The requested Bedrock Runtime inference profile is not available from
+the selected source region or is not enabled for your account. The upstream call
+never returns and the ALB closes the connection at its idle timeout (~60s).
 
 **Fix:**
 ```bash
 # Confirm the configured walkthrough model works:
-GATEWAY_MODEL=gpt-5.5 make litellm-validate
+GATEWAY_MODEL=gpt-5.6-sol make litellm-validate
 ```
 
 If a specific model times out, verify it is available for your account and
@@ -654,16 +656,32 @@ Edit `deployment/litellm/litellm_config.yaml`:
 
 ```yaml
 model_list:
-  - model_name: gpt-5.4
+  - model_name: gpt-5.6-sol
     litellm_params:
-      model: bedrock_mantle/openai.gpt-5.4
+      model: openai/global.openai.gpt-5.6-sol
+      api_base: os.environ/BEDROCK_RUNTIME_BASE_URL
+      api_key: os.environ/AWS_BEARER_TOKEN_BEDROCK
 
-  - model_name: gpt-5.5
+  - model_name: gpt-5.6-terra
     litellm_params:
-      model: bedrock_mantle/openai.gpt-5.5
+      model: openai/global.openai.gpt-5.6-terra
+      api_base: os.environ/BEDROCK_RUNTIME_BASE_URL
+      api_key: os.environ/AWS_BEARER_TOKEN_BEDROCK
+
+  - model_name: gpt-5.6-luna
+    litellm_params:
+      model: openai/global.openai.gpt-5.6-luna
+      api_base: os.environ/BEDROCK_RUNTIME_BASE_URL
+      api_key: os.environ/AWS_BEARER_TOKEN_BEDROCK
 ```
 
-> **Note on GPT-5.4 / GPT-5.5:** These models are Responses-only on Bedrock Mantle. The `bedrock_mantle/` prefix keeps LiteLLM on its documented Mantle Responses provider, which preserves the Responses payload shape Codex expects. Use the newest model that is approved and available in the selected customer account and Region. The bundled LiteLLM image refreshes `AWS_BEARER_TOKEN_BEDROCK` automatically from the gateway's AWS credential chain, and LiteLLM derives the Mantle endpoint from the selected Region. See `reference-regions.md` before choosing a different Region.
+> **Note on GPT-5.6:** Bedrock Runtime requires a cross-Region inference profile
+> ID rather than the Mantle foundation model ID. This sample chooses the
+> `global.` profiles for the broadest capacity and lower per-token pricing.
+> Organizations with US data-residency requirements can switch to `us.`
+> profiles after verifying all three from their source region. The ECS stack
+> supplies `BEDROCK_RUNTIME_BASE_URL` and refreshes
+> `AWS_BEARER_TOKEN_BEDROCK` from the task role.
 
 Rebuild and redeploy the image (Steps 2 & 6).
 
