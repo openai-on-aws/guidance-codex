@@ -6,7 +6,14 @@ IDC_SCRIPT := deployment/scripts/idc-stack.sh
 .PHONY: help litellm-check litellm-build litellm-plan litellm-deploy \
 	litellm-status litellm-provision-key litellm-codex-config litellm-validate \
 	litellm-cleanup-plan litellm-cleanup \
-	portkey-check portkey-codex-config portkey-validate \
+	portkey-cluster-plan portkey-cluster-deploy portkey-cluster-cleanup \
+	portkey-lbc-plan portkey-lbc-deploy portkey-lbc-status \
+	portkey-lbc-cleanup-plan portkey-lbc-cleanup \
+	portkey-aws-check portkey-aws-plan portkey-aws-deploy portkey-helm-plan \
+	portkey-helm-deploy portkey-status \
+	portkey-aws-cleanup-plan portkey-aws-cleanup portkey-check \
+	portkey-codex-config portkey-validate portkey-codex-validate \
+	portkey-auth-negative \
 	idc-check idc-plan idc-deploy idc-provision idc-status idc-client-config \
 	idc-validate
 
@@ -19,8 +26,14 @@ help:
 		'  make litellm-status litellm-provision-key litellm-codex-config litellm-validate' \
 		'  make litellm-cleanup-plan litellm-cleanup' \
 		'' \
-		'Portkey evaluation:' \
-		'  make portkey-check portkey-codex-config portkey-validate' \
+		'Portkey Hybrid on Amazon EKS:' \
+		'  make portkey-cluster-plan portkey-cluster-deploy' \
+		'  make portkey-lbc-plan portkey-lbc-deploy portkey-lbc-status' \
+		'  make portkey-lbc-cleanup-plan portkey-lbc-cleanup' \
+		'  make portkey-aws-check portkey-aws-plan portkey-aws-deploy' \
+		'  make portkey-helm-plan portkey-helm-deploy portkey-status' \
+		'  make portkey-check portkey-codex-config portkey-validate portkey-codex-validate' \
+		'  make portkey-auth-negative portkey-aws-cleanup-plan portkey-aws-cleanup' \
 		'' \
 		'IAM Identity Center:' \
 		'  make idc-check idc-plan idc-deploy idc-provision idc-status' \
@@ -56,6 +69,54 @@ litellm-cleanup-plan:
 litellm-cleanup:
 	@$(LITELLM_SCRIPT) cleanup
 
+portkey-cluster-plan:
+	@$(PORTKEY_SCRIPT) cluster-plan
+
+portkey-cluster-deploy:
+	@$(PORTKEY_SCRIPT) cluster-deploy
+
+portkey-cluster-cleanup:
+	@$(PORTKEY_SCRIPT) cluster-cleanup
+
+portkey-lbc-plan:
+	@$(PORTKEY_SCRIPT) lbc-plan
+
+portkey-lbc-deploy:
+	@$(PORTKEY_SCRIPT) lbc-deploy
+
+portkey-lbc-status:
+	@$(PORTKEY_SCRIPT) lbc-status
+
+portkey-lbc-cleanup-plan:
+	@$(PORTKEY_SCRIPT) lbc-cleanup-plan
+
+portkey-lbc-cleanup:
+	@$(PORTKEY_SCRIPT) lbc-cleanup
+
+portkey-aws-check:
+	@$(PORTKEY_SCRIPT) aws-check
+
+portkey-aws-plan:
+	@$(PORTKEY_SCRIPT) plan
+
+portkey-aws-deploy:
+	@$(PORTKEY_SCRIPT) deploy
+
+portkey-helm-plan:
+	@$(PORTKEY_SCRIPT) helm-plan
+
+portkey-helm-deploy:
+	@$(PORTKEY_SCRIPT) helm-deploy
+
+portkey-status:
+	@$(PORTKEY_SCRIPT) status
+
+portkey-aws-cleanup-plan:
+	@$(PORTKEY_SCRIPT) cleanup-plan
+
+portkey-aws-cleanup:
+	@$(PORTKEY_SCRIPT) cleanup
+
 portkey-check:
 	@$(PORTKEY_SCRIPT) check
 
@@ -64,6 +125,12 @@ portkey-codex-config:
 
 portkey-validate:
 	@$(PORTKEY_SCRIPT) validate
+
+portkey-codex-validate:
+	@$(PORTKEY_SCRIPT) codex-validate
+
+portkey-auth-negative:
+	@$(PORTKEY_SCRIPT) auth-negative
 
 idc-check:
 	@$(IDC_SCRIPT) check

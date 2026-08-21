@@ -13,14 +13,14 @@ Need hard budgets or centralized routing?
 |
 `-- YES -> Want to operate the gateway data plane?
            |-- YES -> LiteLLM on ECS
-           `-- NO  -> Portkey managed or hybrid
+           `-- NO  -> Portkey Hybrid on Amazon EKS
 ```
 
 | Path | Operations | Identity evidence | Best for |
 |---|---|---|---|
 | **[IAM Identity Center](docs/QUICKSTART_NATIVE_AWS_ACCESS.md)** | Lowest | Native AWS session and CloudTrail identity | Existing AWS SSO and direct Bedrock access |
 | **[LiteLLM on ECS](docs/QUICKSTART_LLM_GATEWAY_LITELLM.md)** | Customer operated | Gateway key/JWT telemetry | Inspectable AWS stack and hard controls |
-| **[Portkey](docs/QUICKSTART_LLM_GATEWAY_PORTKEY.md)** | Managed or hybrid | Workspace key/JWT telemetry | Vendor-managed policy, routing, and analytics |
+| **[Portkey](docs/QUICKSTART_LLM_GATEWAY_PORTKEY.md)** | Hybrid gateway on EKS; S3 logs; IRSA | Workspace key/JWT telemetry | AWS data plane with Portkey-managed control plane |
 
 The repository also retains an
 [AgentCore Gateway](docs/QUICKSTART_AGENTCORE_GATEWAY.md) pattern for customers
@@ -92,7 +92,7 @@ the production settings in the quickstart.
 - **Native AWS Access** → [Quickstart](docs/QUICKSTART_NATIVE_AWS_ACCESS.md)
 - **AgentCore Gateway** → [Quickstart](docs/QUICKSTART_AGENTCORE_GATEWAY.md)
 - **LiteLLM Gateway** → [Primary enterprise walkthrough](docs/QUICKSTART_LLM_GATEWAY_LITELLM.md)
-- **Portkey Gateway** → [Managed and hybrid evaluation](docs/QUICKSTART_LLM_GATEWAY_PORTKEY.md)
+- **Portkey Gateway** → [Hybrid AWS deployment with Bedrock Mantle](docs/QUICKSTART_LLM_GATEWAY_PORTKEY.md)
 - **Gateway requirements** → [Pattern requirements](docs/QUICKSTART_LLM_GATEWAY.md)
 
 ## Documentation
