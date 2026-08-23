@@ -86,6 +86,29 @@ through different public IP addresses. Keep each source restricted to an exact
 use trusted DNS, ACM, HTTPS on port 443, private ECS and database subnets, and
 the production settings in the quickstart.
 
+## What Portkey Does During a Task
+
+Portkey Hybrid also leaves Codex on the developer workstation. Codex resolves
+a customer-controlled private hostname and sends each Responses request over
+the approved corporate or VPN route. An internal Network Load Balancer
+terminates ACM-backed TLS and forwards the request to the Portkey Enterprise
+gateway on Amazon EKS. The gateway applies the synchronized provider and model
+configuration, uses its IRSA role to invoke an explicitly allowlisted Bedrock
+Mantle model, and writes request and response logs to the retained S3 bucket.
+
+```text
+Codex -> private DNS/VPN -> NLB TLS -> Portkey on EKS -> Bedrock Mantle
+  ^                                                              |
+  `---------------- local tool result <---------------------------'
+```
+
+Redis remains cluster-internal, and the Portkey managed control plane is used
+for outbound configuration and control synchronization rather than as the
+Codex data endpoint. If the model requests a tool, Codex runs it locally and
+sends the result through the same private gateway path on the next turn.
+
+![Codex request flow through Portkey Hybrid on AWS](docs/assets/portkey-architecture.png)
+
 ## Quick Start
 
 - **Overview & decision guide** → [QUICKSTART.md](QUICKSTART.md)
