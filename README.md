@@ -11,16 +11,16 @@ Need hard budgets or centralized routing?
 |
 |-- NO  -> Native AWS Access with IAM Identity Center
 |
-`-- YES -> Want to operate the gateway data plane?
-           |-- YES -> LiteLLM on ECS
-           `-- NO  -> Portkey Hybrid on Amazon EKS
+`-- YES -> Where should gateway control-plane operations live?
+           |-- Your AWS account -> LiteLLM on ECS
+           `-- Portkey managed  -> Portkey Hybrid on Amazon EKS
 ```
 
 | Path | Operations | Identity evidence | Best for |
 |---|---|---|---|
 | **[IAM Identity Center](docs/QUICKSTART_NATIVE_AWS_ACCESS.md)** | Lowest | Native AWS session and CloudTrail identity | Existing AWS SSO and direct Bedrock access |
-| **[LiteLLM on ECS](docs/QUICKSTART_LLM_GATEWAY_LITELLM.md)** | Customer operated | Gateway key/JWT telemetry | Inspectable AWS stack and hard controls |
-| **[Portkey](docs/QUICKSTART_LLM_GATEWAY_PORTKEY.md)** | Hybrid gateway on EKS; S3 logs; IRSA | Workspace key/JWT telemetry | AWS data plane with Portkey-managed control plane |
+| **[LiteLLM on ECS](docs/QUICKSTART_LLM_GATEWAY_LITELLM.md)** | Customer-operated stack | Scoped gateway key; optional OIDC mapping | Inspectable AWS stack and hard controls |
+| **[Portkey](docs/QUICKSTART_LLM_GATEWAY_PORTKEY.md)** | Customer-operated EKS data plane; Portkey-managed control plane | Workspace Service API key and gateway logs | Integrated Portkey policy and analytics on a private AWS data plane |
 
 The repository also retains an
 [AgentCore Gateway](docs/QUICKSTART_AGENTCORE_GATEWAY.md) pattern for customers
@@ -88,24 +88,27 @@ the production settings in the quickstart.
 
 ## What Portkey Does During a Task
 
-Portkey Hybrid also leaves Codex on the developer workstation. Codex resolves
-a customer-controlled private hostname and sends each Responses request over
-the approved corporate or VPN route. An internal Network Load Balancer
-terminates ACM-backed TLS and forwards the request to the Portkey Enterprise
-gateway on Amazon EKS. The gateway applies the synchronized provider and model
-configuration, uses its IRSA role to invoke an explicitly allowlisted Bedrock
-Mantle model, and writes request and response logs to the retained S3 bucket.
+Portkey Hybrid also keeps Codex on the developer workstation. Each Responses
+request uses customer private DNS and an approved corporate or VPN route to
+reach an internal Network Load Balancer. The NLB terminates ACM-backed TLS and
+forwards the request to the Portkey Enterprise gateway on Amazon EKS.
+
+The gateway applies the provider and model configuration received from
+Portkey. It uses its IRSA role to invoke the allowlisted Bedrock Mantle models
+and write request and response logs to the retained S3 bucket.
 
 ```text
 Codex -> private DNS/VPN -> NLB TLS -> Portkey on EKS -> Bedrock Mantle
   ^                                                              |
-  `---------------- local tool result <---------------------------'
+  `-------------- model response / tool call <-------------------'
 ```
 
-Redis remains cluster-internal, and the Portkey managed control plane is used
-for outbound configuration and control synchronization rather than as the
-Codex data endpoint. If the model requests a tool, Codex runs it locally and
-sends the result through the same private gateway path on the next turn.
+Redis remains cluster-internal. The gateway connects outbound to Portkey's
+managed control plane to synchronize configuration and send operational
+analytics metadata such as model choice, token counts, and latency. Prompt and
+response inference traffic uses the private NLB path. If the model requests a
+tool, Codex runs it locally and sends the result through that path on the next
+turn.
 
 ![Codex request flow through Portkey Hybrid on AWS](docs/assets/portkey-architecture.png)
 
@@ -136,13 +139,15 @@ Authentication and telemetry both use features built into Codex.
 - **Native AWS Access.** Codex's `amazon-bedrock` provider signs requests with AWS
   SigV4 from the standard credential chain. Developers sign in with `aws sso login`
   (IAM Identity Center).
-- **Gateway patterns.** The gateway uses a `CUSTOM_JWT` authorizer, so Codex sends an
-  OIDC bearer token from your IdP. Codex refreshes the token automatically when you
-  point the provider at a token-fetch `auth` command (model-provider path) or use
-  `[mcp_servers.*.oauth]` (MCP path); a static `env_key` token works too if you'd
-  rather renew it yourself.
-
-See [daily use](docs/QUICKSTART_AGENTCORE_GATEWAY.md#daily-use) for the day-to-day flow.
+- **AgentCore Gateway.** Its `CUSTOM_JWT` authorizer validates an OIDC bearer
+  token from your IdP. Codex can refresh the token through a provider `auth`
+  command. See [daily use](docs/QUICKSTART_AGENTCORE_GATEWAY.md#daily-use).
+- **LiteLLM Gateway.** Codex retrieves a scoped LiteLLM key from Secrets Manager;
+  the optional middleware adds OIDC self-service key mapping. See
+  [Codex configuration](docs/QUICKSTART_LLM_GATEWAY_LITELLM.md#codex-configuration).
+- **Portkey Gateway.** Codex reads a Workspace Service API key from
+  `PORTKEY_API_KEY` and sends it as bearer authorization and
+  `x-portkey-api-key`. See [Configure Codex](docs/QUICKSTART_LLM_GATEWAY_PORTKEY.md#7-configure-codex).
 
 ### Telemetry
 

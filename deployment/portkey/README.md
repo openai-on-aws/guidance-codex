@@ -13,8 +13,9 @@ does not implement a fully air-gapped Portkey control plane; that requires
 separate Enterprise artifacts and design work.
 
 Portkey's managed control plane remains outside the customer AWS account. The
-gateway initiates outbound configuration and control synchronization to it;
-`api.portkey.ai` is not the Codex inference endpoint.
+gateway initiates outbound configuration synchronization and sends operational
+analytics metadata such as model choice, token counts, and latency. Prompt and
+response inference traffic does not use `api.portkey.ai` as its endpoint.
 
 ## Architecture
 

@@ -20,7 +20,8 @@ Portkey's supported [EKS deployment](https://portkey.ai/docs/self-hosting/hybrid
 requires licensed images and a client-auth license supplied by Portkey.
 The Portkey organization and workspace must be enabled for Hybrid deployment.
 This guide does not cover a fully air-gapped Portkey control plane, which
-requires separate Enterprise artifacts and design work.
+requires a separate Portkey-supported Enterprise deployment outside this
+workflow.
 
 ## What the deployment looks like
 
@@ -39,8 +40,9 @@ the gateway pod. Redis uses a `ClusterIP` Service. The gateway uses IRSA to
 call Bedrock Mantle and write logs to S3.
 
 Portkey's managed control plane is separate from the inference path. The
-gateway initiates outbound HTTPS connections to it for configuration and
-control synchronization.
+gateway initiates outbound HTTPS connections to synchronize configuration and
+send operational analytics metadata such as model choice, token counts, and
+latency. Prompt and response inference traffic does not use that connection.
 
 | This repository deploys | You provide |
 | --- | --- |
@@ -55,7 +57,7 @@ control synchronization.
 You need:
 
 - AWS CLI v1 or v2 credentials for a non-production AWS account;
-- `eksctl`, `kubectl`, Helm 3, Python 3, and the Codex CLI;
+- Bash, `make`, `eksctl`, `kubectl`, Helm 3, Python 3, and the Codex CLI;
 - either an existing EKS cluster with OIDC enabled or permission to create the
   included sandbox cluster;
 - permission to install or reuse a compatible AWS Load Balancer Controller;
@@ -86,9 +88,11 @@ This walkthrough creates billable resources, including EKS control-plane and
 worker-node capacity, an NLB, S3 storage, and model inference. Review prices in
 the selected Regions and clean up the evaluation when it is finished.
 
-For production, apply your normal private-cluster, egress, autoscaling, backup,
-and admission-control standards; the included cluster is an evaluation
-sandbox.
+The included cluster is an evaluation sandbox with two managed worker nodes;
+its template does not define a private-only control-plane endpoint,
+autoscaling policy, backup policy, or admission controls. Replace or extend it
+to meet your production networking, egress, scaling, backup, and policy
+requirements.
 
 The baseline also needs these network paths:
 
@@ -96,7 +100,7 @@ The baseline also needs these network paths:
 | --- | --- | --- |
 | Codex client | Customer private DNS and routing to the internal NLB | Inference traffic |
 | Worker nodes/container runtime | Docker Hub registry, auth, and content endpoints | Pull the gateway and Redis images |
-| Gateway pod | `api.portkey.ai` and `albus.portkey.ai` | Configuration and control synchronization |
+| Gateway pod | `api.portkey.ai` and `albus.portkey.ai` | Configuration synchronization and operational analytics metadata |
 | Gateway pod | AWS STS and regional S3 in `AWS_REGION` | IRSA and request/response logs |
 | Gateway pod | `bedrock-mantle.<BEDROCK_MANTLE_REGION>.api.aws` | Model inference |
 
@@ -199,10 +203,13 @@ install -m 600 deployment/portkey/.env.deploy.example \
   deployment/portkey/.env.deploy
 ```
 
-Edit the ignored file. The following block shows the settings to review before
-creating the cluster or gateway resources:
+The driver reads this file with Bash `source`; it is trusted shell assignment
+syntax, not a passive dotenv file. Use single-quoted assignments for values
+that contain whitespace or shell metacharacters, and never paste untrusted
+text into it. The following block shows the settings to review before creating
+the cluster or gateway resources:
 
-```dotenv
+```bash
 # Regions and deployment names
 AWS_REGION=us-east-1
 BEDROCK_MANTLE_REGION=us-east-1

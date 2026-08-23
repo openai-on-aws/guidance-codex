@@ -236,15 +236,16 @@ def build_svg() -> str:
     )
     controller = horizontal_card(
         915,
-        590,
+        582,
         255,
-        115,
+        123,
         Deployment,
         ["AWS Load Balancer", "Controller"],
         [
-            "kube-system",
-            "Watches Portkey namespace",
-            "Separate NLB-only IRSA",
+            "Reconciles gateway Service",
+            "Workflow-managed path:",
+            "Namespace-scoped",
+            "NLB-only IRSA",
         ],
         border="#326CE5",
         fill="#F5F8FF",
@@ -277,7 +278,7 @@ def build_svg() -> str:
   width="1600" height="980" viewBox="0 0 1600 980"
   role="img" aria-labelledby="title desc">
   <title id="title">Codex through Portkey Hybrid on Amazon EKS</title>
-  <desc id="desc">Codex and local tools remain on the developer workstation. The client uses customer-provided private DNS and corporate or VPN routing to reach an internal IPv4 Network Load Balancer. The load balancer accepts ACM TLS on port 443 only from approved prefix lists and forwards TCP on port 8787 to the Portkey Enterprise gateway in Amazon EKS. The Redis Service is ClusterIP only. The gateway assumes a scoped IRSA role to invoke Amazon Bedrock Mantle within the configured project scope and explicit model allowlist and to store request and response logs in a retained Amazon S3 bucket. The AWS Load Balancer Controller in kube-system watches the configured Portkey namespace and manages the load balancer. The gateway initiates a separate outbound HTTPS connection to Portkey's managed control plane for configuration and control synchronization.</desc>
+  <desc id="desc">Codex and local tools remain on the developer workstation. The client uses customer-provided private DNS and corporate or VPN routing to reach an internal IPv4 Network Load Balancer. The load balancer accepts ACM TLS on port 443 only from approved prefix lists and forwards TCP on port 8787 to the Portkey Enterprise gateway in Amazon EKS. The Redis Service is ClusterIP only. The gateway assumes a scoped IRSA role to invoke Amazon Bedrock Mantle within the configured project scope and explicit model allowlist and to store request and response logs in a retained Amazon S3 bucket. The AWS Load Balancer Controller reconciles the gateway Service. When the workflow manages that controller, it runs in kube-system, watches the configured Portkey namespace, and uses a separate NLB-only IRSA role. The gateway initiates a separate outbound HTTPS connection to Portkey's managed control plane for configuration synchronization and operational analytics metadata; prompt and response inference traffic does not use that connection.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
       <path d="M0,0 L10,5 L0,10 z" fill="#146EB4"/>
@@ -344,7 +345,7 @@ def build_svg() -> str:
     fill="#FFF9F3" stroke="#ED7100" stroke-width="2" stroke-dasharray="8 6"/>
   {image(EKS, 906, 197, 30)}
   <text x="944" y="219" font-size="17" font-weight="700" fill="#ED7100">
-    Amazon EKS cluster
+    Amazon EKS data plane
   </text>
 
   <rect x="902" y="230" width="280" height="350" rx="7"
@@ -398,7 +399,7 @@ def build_svg() -> str:
   <path class="dependency" d="M1042 470 V475" marker-end="url(#arrow-muted)"/>
   <path class="dependency" d="M915 650 H875 Q845 650 845 605 V450"/>
   <path class="dependency" d="M845 450 V445" marker-end="url(#arrow-muted)"/>
-  {text_lines(840, 578, ["namespace-scoped", "reconciliation"], size=11, color="#7A8793", anchor="end", line_height=15)}
+  {text_lines(840, 578, ["Service", "reconciliation"], size=11, color="#7A8793", anchor="end", line_height=15)}
 
   <path class="log-flow" d="M1170 445 H1205 Q1230 445 1230 470 V517 H1265"
     marker-end="url(#arrow-log)"/>
@@ -412,7 +413,7 @@ def build_svg() -> str:
     C969 834 985 847 985 864 C985 880 973 887 956 887 H901 C885 887 875 878 875 862Z"
     fill="#FFFFFF" stroke="#7A8793" stroke-width="2"/>
   {text_lines(1010, 846, ["Portkey managed control plane"], size=17, color="#161E2D", weight=700, anchor="start")}
-  {text_lines(1010, 873, ["Configuration and control synchronization · not the inference endpoint"], size=13, anchor="start")}
+  {text_lines(1010, 870, ["Config sync + operational analytics metadata", "No prompt/response inference traffic"], size=12, anchor="start", line_height=17)}
   <path class="dependency" d="M1150 470 H1180 V807"
     marker-end="url(#arrow-muted)"/>
   {text_lines(1095, 780, ["Data plane initiates outbound HTTPS"], size=12, color="#5F6B7A", weight=700)}
