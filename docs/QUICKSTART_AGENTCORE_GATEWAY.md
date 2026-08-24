@@ -87,7 +87,7 @@ not script IdP creation — follow your provider's own documentation:**
   a resource server with a custom scope, and an app client. For headless/automation
   use, enable the **client credentials** grant.
   - User pool + app client with client credentials:
-    <https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-client-credentials.html>
+    <https://docs.aws.amazon.com/cognito/latest/developerguide/federation-endpoints-oauth-grants.html>
   - Token endpoint:
     <https://docs.aws.amazon.com/cognito/latest/developerguide/token-endpoint.html>
 - **Okta / Entra ID / Auth0:** use that provider's OIDC app + client-credentials (or
