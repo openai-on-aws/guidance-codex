@@ -442,10 +442,15 @@ Resources:
               - bedrock:InvokeModel
               - bedrock:InvokeModelWithResponseStream
             Resource:
-              - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
-              - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"
-              - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:application-inference-profile/*"
-              - !Sub "arn:${AWS::Partition}:bedrock:${AwsRegion}:${AWS::AccountId}:project/default"
+              # Cross-Region inference requires access to the profile and its
+              # destination foundation models. Restrict both to GPT-5.6.
+              - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/openai.gpt-5.6-*"
+              - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/global.openai.gpt-5.6-*"
+              - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/us.openai.gpt-5.6-*"
+              - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:project/default"
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref AwsRegion
           - Effect: Allow
             Action:
               - bedrock:CallWithBearerToken
@@ -460,7 +465,7 @@ Resources:
               - bedrock:GetInvoke
               - bedrock:CancelInvoke
               - bedrock:DeleteInvoke
-            Resource: !Sub "arn:${AWS::Partition}:bedrock:${AwsRegion}:${AWS::AccountId}:project/default"
+            Resource: !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:project/default"
             Condition:
               StringEquals:
                 aws:RequestedRegion: !Ref AwsRegion

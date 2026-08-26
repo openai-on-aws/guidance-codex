@@ -290,10 +290,9 @@ the ECS task port 4000 or PostgreSQL port 5432 publicly.
 
 The bundled LiteLLM image routes its OpenAI-compatible Responses traffic to
 `https://bedrock-runtime.<region>.amazonaws.com/openai/v1` and uses the Global
-cross-Region GPT-5.6 profile IDs. It refreshes `AWS_BEARER_TOKEN_BEDROCK`
-in-process from the gateway task role using the official
-`aws-bedrock-token-generator` package, rather than injecting a static bearer
-token.
+cross-Region GPT-5.6 profile IDs. The entrypoint refreshes the per-request
+Runtime bearer token in-process from the gateway task role using the official
+`aws-bedrock-token-generator` package, rather than injecting a static token.
 
 With `Route53HostedZoneId`, CloudFormation creates and DNS-validates the ACM
 certificate and creates the ALB alias record. With `AlbCertificateArn`, the
@@ -660,19 +659,16 @@ model_list:
     litellm_params:
       model: openai/global.openai.gpt-5.6-sol
       api_base: os.environ/BEDROCK_RUNTIME_BASE_URL
-      api_key: os.environ/AWS_BEARER_TOKEN_BEDROCK
 
   - model_name: gpt-5.6-terra
     litellm_params:
       model: openai/global.openai.gpt-5.6-terra
       api_base: os.environ/BEDROCK_RUNTIME_BASE_URL
-      api_key: os.environ/AWS_BEARER_TOKEN_BEDROCK
 
   - model_name: gpt-5.6-luna
     litellm_params:
       model: openai/global.openai.gpt-5.6-luna
       api_base: os.environ/BEDROCK_RUNTIME_BASE_URL
-      api_key: os.environ/AWS_BEARER_TOKEN_BEDROCK
 ```
 
 > **Note on GPT-5.6:** Bedrock Runtime requires a cross-Region inference profile
@@ -680,8 +676,10 @@ model_list:
 > `global.` profiles for the broadest capacity and lower per-token pricing.
 > Organizations with US data-residency requirements can switch to `us.`
 > profiles after verifying all three from their source region. The ECS stack
-> supplies `BEDROCK_RUNTIME_BASE_URL` and refreshes
-> `AWS_BEARER_TOKEN_BEDROCK` from the task role.
+> supplies `BEDROCK_RUNTIME_BASE_URL` and refreshes the per-request
+> `OPENAI_API_KEY` used by the Runtime path. Do not add an
+> `api_key: os.environ/...` value to the Runtime deployments: LiteLLM resolves
+> that form when the model list is loaded, which would pin the initial token.
 
 Rebuild and redeploy the image (Steps 2 & 6).
 

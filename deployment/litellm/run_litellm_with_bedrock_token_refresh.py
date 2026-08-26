@@ -124,6 +124,9 @@ def _refresh_bedrock_token() -> None:
         raise RuntimeError("aws-bedrock-token-generator returned an empty token")
 
     os.environ["AWS_BEARER_TOKEN_BEDROCK"] = token
+    # The GPT-5.6 deployments use LiteLLM's OpenAI Responses adapter. Leave
+    # api_key unset in config.yaml so the adapter reads this value per request.
+    os.environ["OPENAI_API_KEY"] = token
 
 
 def _validate_proxy_args(args: Iterable[str]) -> None:
