@@ -66,42 +66,6 @@ budgets, and gateway telemetry.
 
 ![Codex request flow through LiteLLM on AWS](docs/assets/litellm-architecture.png)
 
-### Validated Walkthrough
-
-The LiteLLM reference was deployed and contract-tested in `us-east-1`. The
-walkthrough endpoint is CIDR-restricted and intentionally uses HTTP only;
-production defaults remain TLS and Multi-AZ. Follow the
-[LiteLLM quickstart](docs/QUICKSTART_LLM_GATEWAY_LITELLM.md) to reproduce the
-deployment and run the strict Responses API contract probe.
-
-![Live LiteLLM API deployed on AWS](docs/assets/litellm-live-api.jpg)
-
-The health endpoint confirms that the proxy is reachable through the
-Application Load Balancer. The administration login is protected by the
-LiteLLM master credential:
-
-![LiteLLM administration login](docs/assets/litellm-admin-login.jpg)
-
-The checked-in configuration exposes these stable Bedrock Runtime aliases:
-
-![Configured LiteLLM Bedrock Runtime model aliases](docs/assets/litellm-runtime-model-aliases.svg)
-
-After `codex exec` validation, LiteLLM records each Responses API turn with its
-status, scoped key alias, model, cost, and latency. Tool-using tasks create
-multiple rows because Codex returns each local tool result through the gateway:
-
-![Successful Codex Responses requests in LiteLLM](docs/assets/litellm-codex-request-logs.png)
-
-The usage view aggregates request, token, and spend data by model and identity:
-
-![LiteLLM aggregate model usage dashboard](docs/assets/litellm-usage-dashboard.png)
-
-For a temporary HTTP walkthrough, browser and terminal traffic can leave
-through different public IP addresses. Keep each source restricted to an exact
-`/32`; do not expose the gateway to `0.0.0.0/0`. Customer deployments should
-use trusted DNS, ACM, HTTPS on port 443, private ECS and database subnets, and
-the production settings in the quickstart.
-
 ## Also Included: Portkey Hybrid
 
 Portkey Hybrid keeps the gateway data plane in your AWS account while Portkey
@@ -111,6 +75,7 @@ that private path. See the [Portkey quickstart](docs/QUICKSTART_LLM_GATEWAY_PORT
 for the full deployment.
 
 ![Codex request flow through Portkey Hybrid on AWS](docs/assets/portkey-architecture.png)
+
 ## Client tooling — Codex-native by design
 
 Authentication and telemetry both use features built into Codex.
