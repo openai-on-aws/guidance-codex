@@ -11,10 +11,7 @@ Need centralized routing, hard budgets, or gateway policy?
 |
 |-- NO  -> Native AWS Access with IAM Identity Center
 |
-`-- YES -> Which gateway operating model fits?
-           |-- Operate it in your AWS account     -> LiteLLM on ECS
-           `-- Portkey-managed control plane,
-               your AWS data plane                -> Portkey Hybrid on EKS
+`-- YES -> LLM Gateway
 ```
 
 | Path | Operations | Identity evidence | Best for |
