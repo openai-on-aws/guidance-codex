@@ -11,7 +11,10 @@ def _load_wrapper():
     token_generator.provide_token.return_value = "test-token"
     sys.modules.setdefault("aws_bedrock_token_generator", token_generator)
 
-    wrapper_path = pathlib.Path(__file__).parents[2] / "run_litellm_with_bedrock_mantle_refresh.py"
+    wrapper_path = (
+        pathlib.Path(__file__).parents[2]
+        / "run_litellm_with_bedrock_token_refresh.py"
+    )
     spec = importlib.util.spec_from_file_location("gateway_runtime", wrapper_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -51,6 +54,36 @@ class TestDatabaseConfiguration(unittest.TestCase):
                 self.runtime._configure_database_url()
 
 
+class TestBedrockTokenRefresh(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.runtime = _load_wrapper()
+
+    def test_refresh_updates_runtime_tokens(self):
+        with (
+            patch.dict(os.environ, {"AWS_REGION": "us-east-2"}, clear=True),
+            patch.object(
+                self.runtime,
+                "provide_token",
+                side_effect=["first-token", "second-token"],
+            ),
+        ):
+            self.runtime._refresh_bedrock_token()
+            self.assertEqual(os.environ["OPENAI_API_KEY"], "first-token")
+            self.assertEqual(
+                os.environ["AWS_BEARER_TOKEN_BEDROCK"],
+                "first-token",
+            )
+            self.assertEqual(os.environ["BEDROCK_RUNTIME_REGION"], "us-east-2")
+
+            self.runtime._refresh_bedrock_token()
+            self.assertEqual(os.environ["OPENAI_API_KEY"], "second-token")
+            self.assertEqual(
+                os.environ["AWS_BEARER_TOKEN_BEDROCK"],
+                "second-token",
+            )
+
+
 class TestInfrastructureContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -60,6 +93,9 @@ class TestInfrastructureContract(unittest.TestCase):
         ).read_text(encoding="utf-8")
         cls.dockerfile = (
             repo_root / "deployment/litellm/Dockerfile"
+        ).read_text(encoding="utf-8")
+        cls.config = (
+            repo_root / "deployment/litellm/litellm_config.yaml"
         ).read_text(encoding="utf-8")
 
     def test_task_definition_does_not_render_database_password(self):
@@ -85,6 +121,42 @@ class TestInfrastructureContract(unittest.TestCase):
         self.assertIn("PlatformVersion: LATEST", self.template)
         self.assertIn("mode: blocking", self.template)
         self.assertIn("deregistration_delay.timeout_seconds", self.template)
+
+    def test_runtime_token_is_resolved_per_request(self):
+        self.assertNotIn(
+            "api_key: os.environ/AWS_BEARER_TOKEN_BEDROCK",
+            self.config,
+        )
+        wrapper = (
+            pathlib.Path(__file__).parents[2]
+            / "run_litellm_with_bedrock_token_refresh.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('os.environ["OPENAI_API_KEY"] = token', wrapper)
+
+    def test_gateway_config_is_runtime_only(self):
+        self.assertNotIn("bedrock_mantle/", self.config)
+        self.assertNotIn("model_name: gpt-5.4", self.config)
+        self.assertNotIn("model_name: gpt-5.5", self.config)
+
+    def test_runtime_iam_is_scoped_to_gpt_5_6_and_source_region(self):
+        self.assertIn(
+            "foundation-model/openai.gpt-5.6-*",
+            self.template,
+        )
+        self.assertIn(
+            "inference-profile/global.openai.gpt-5.6-*",
+            self.template,
+        )
+        self.assertIn(
+            "inference-profile/us.openai.gpt-5.6-*",
+            self.template,
+        )
+        self.assertNotIn("application-inference-profile/*", self.template)
+        invoke_statement = self.template.split(
+            "- bedrock:InvokeModelWithResponseStream",
+            maxsplit=1,
+        )[1].split("- Effect: Allow", maxsplit=1)[0]
+        self.assertIn("aws:RequestedRegion: !Ref AwsRegion", invoke_statement)
 
 
 if __name__ == "__main__":

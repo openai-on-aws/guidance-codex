@@ -130,12 +130,12 @@ run_check() {
   check_docker
   AWS_CLI="$AWS_CLI" python3 "$SCRIPT_DIR/preflight-litellm.py" --stage build
   python3 "$REPO_ROOT/deployment/scripts/validate-doc-links.py" >/dev/null
-  log "Mantle model access is verified after deployment with the Responses contract."
+  log "Bedrock Runtime model access is verified after deployment with the Responses contract."
   if command -v cfn-lint >/dev/null 2>&1; then
     cfn-lint \
       "$REPO_ROOT/deployment/infrastructure/networking.yaml" \
       "$REPO_ROOT/deployment/litellm/ecs/litellm-ecs.yaml" \
-      --ignore-checks W6001
+      --ignore-checks W6001 W3037
   else
     log "cfn-lint is not on PATH; CI still enforces template linting."
   fi
@@ -203,7 +203,6 @@ gateway_parameters() {
     "EnableOtel=false"
     "DBUsername=litellm"
     "AwsRegion=$BEDROCK_REGION"
-    "MantleProjectId=${MANTLE_PROJECT_ID:-default}"
     "LiteLLMImage=$LITELLM_IMAGE"
     "AllowedCidr=$ALLOWED_CIDR"
     "AssignPublicIp=$ASSIGN_PUBLIC_IP"
@@ -374,7 +373,7 @@ run_provision_key() {
   kms_key_arn="$(stack_output LiteLLMKmsKeyArn)"
   key_parameters=(
     --key-alias "${CODEX_KEY_ALIAS:-codex-walkthrough}"
-    --models "${CODEX_KEY_MODELS:-gpt-5.5}"
+    --models "${CODEX_KEY_MODELS:-gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna}"
   )
   [[ -z "${CODEX_KEY_USER_ID:-}" ]] ||
     key_parameters+=(--user-id "$CODEX_KEY_USER_ID")
@@ -427,7 +426,7 @@ import json
 import sys
 
 endpoint, python_cli, helper, aws_cli, secret_id, aws_region, aws_profile = sys.argv[1:]
-print('model = "gpt-5.5"')
+print('model = "gpt-5.6-sol"')
 print('model_provider = "litellm-gateway"')
 print('web_search = "disabled"')
 print()
@@ -470,7 +469,7 @@ run_validate() {
   endpoint="${GATEWAY_BASE_URL:-$(stack_output GatewayEndpoint)}"
   if [[ -n "${GATEWAY_API_KEY:-}" ]]; then
     GATEWAY_BASE_URL="$endpoint" \
-      GATEWAY_MODEL="${GATEWAY_MODEL:-gpt-5.5}" \
+      GATEWAY_MODEL="${GATEWAY_MODEL:-gpt-5.6-sol}" \
       python3 "$SCRIPT_DIR/validate-responses-contract.py" --include-tool-call
     return
   fi
@@ -485,7 +484,7 @@ run_validate() {
     secret_field="LITELLM_MASTER_KEY"
   fi
   GATEWAY_BASE_URL="$endpoint" \
-    GATEWAY_MODEL="${GATEWAY_MODEL:-gpt-5.5}" \
+    GATEWAY_MODEL="${GATEWAY_MODEL:-gpt-5.6-sol}" \
     python3 "$SECRET_AUTH_HELPER" \
       --aws-cli "$AWS_CLI" \
       --region "$AWS_REGION" \

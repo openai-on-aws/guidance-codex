@@ -222,18 +222,22 @@ When you deploy the LiteLLM reference stacks:
 
 ## Supported Models
 
-| Model ID | Notes |
-|----------|-------|
-| `openai.gpt-5.5` | Preferred default where available. Latest GPT-5 model recommended by OpenAI for Codex. |
-| `openai.gpt-5.4` | Useful fallback when your chosen Bedrock region or account does not expose `openai.gpt-5.5` yet. |
+| Model | Bedrock Runtime profile ID (preferred) | Mantle ID |
+|-------|----------------------------------------|-----------|
+| GPT-5.6 Sol | `global.openai.gpt-5.6-sol` | `openai.gpt-5.6-sol` |
+| GPT-5.6 Terra | `global.openai.gpt-5.6-terra` | `openai.gpt-5.6-terra` |
+| GPT-5.6 Luna | `global.openai.gpt-5.6-luna` | `openai.gpt-5.6-luna` |
 
-OpenAI recommends the latest GPT-5 family model for Codex. In this repo,
-prefer `openai.gpt-5.5` when your Bedrock region and account support it, and
-use `openai.gpt-5.4` when you need a fallback.
+The LiteLLM gateway uses the Bedrock Runtime profile IDs and exposes the short
+client aliases `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`. Native AWS
+Access and AgentCore currently retain Mantle IDs because their built-in
+Codex/AgentCore connectors still target Mantle. Replace `global.` with `us.`
+only when US data residency is required and the profiles pass validation from
+your chosen source region.
 
 Do not treat this repository as the source of truth for region availability.
 Check the current AWS Bedrock model docs and verify directly in your account
-with `aws bedrock list-foundation-models --region <region>`.
+with `aws bedrock list-inference-profiles --region <region>`.
 
 ---
 

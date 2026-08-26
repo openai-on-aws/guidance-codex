@@ -99,7 +99,7 @@ if command -v awscurl >/dev/null 2>&1; then
     || echo "  (query returned no data yet — emit a Codex turn and retry in ~60s)"
 else
   echo "awscurl not installed — skipping the signed query."
-  echo "  Install (pip install awscurl) then run:"
+  echo "  Install (uv tool install awscurl) then run:"
   echo "    awscurl --region ${REGION} --service monitoring \\"
   echo "      '${PROM_URL}' --data-urlencode 'query=${PROM_QUERY}' -X POST"
   echo "  Or open the CloudWatch console → Metrics → Query with PromQL."

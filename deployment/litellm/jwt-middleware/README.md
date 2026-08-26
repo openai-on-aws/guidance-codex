@@ -196,7 +196,7 @@ export JWT_TOKEN="eyJhbGc..."
 curl https://<gateway-url>/v1/responses \
   -H "Authorization: Bearer $JWT_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"model":"gpt-5.5","input":"Hi"}'
+  -d '{"model":"gpt-5.6-sol","input":"Hi"}'
 
 # Middleware:
 # 1. Validates JWT
@@ -251,8 +251,10 @@ Unit tests live in [`tests/`](tests/) and run with the standard-library
 
 ```bash
 # from this directory (deployment/litellm/jwt-middleware)
-pip install -r requirements.txt -r tests/requirements.txt
-python3 -m unittest discover -s tests -v
+uv run \
+  --with-requirements requirements.txt \
+  --with-requirements tests/requirements.txt \
+  python -m unittest discover -s tests -v
 ```
 
 - `test_jwt_org_claims.py` — JWT org-claim extraction (custom:/flat/alias

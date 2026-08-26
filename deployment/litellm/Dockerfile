@@ -4,7 +4,7 @@ ARG LITELLM_BASE_IMAGE=ghcr.io/berriai/litellm@sha256:65d84a2282137b4dc73bbe1846
 FROM ${LITELLM_BASE_IMAGE}
 
 # Install OpenTelemetry SDK for metrics export and the official Bedrock
-# bearer-token generator used for long-lived Mantle auth.
+# bearer-token generator used for long-lived bedrock-runtime auth.
 RUN /usr/bin/python -m ensurepip --upgrade \
     && /usr/bin/python -m pip install --no-cache-dir \
     --target /app/.venv/lib/python3.13/site-packages \
@@ -32,12 +32,12 @@ RUN set -eux; \
     chown -R 10001:10001 /app /home/appuser
 
 COPY --chown=10001:10001 litellm_config.yaml /app/config.yaml
-COPY --chown=10001:10001 run_litellm_with_bedrock_mantle_refresh.py /app/run_litellm_with_bedrock_mantle_refresh.py
+COPY --chown=10001:10001 run_litellm_with_bedrock_token_refresh.py /app/run_litellm_with_bedrock_token_refresh.py
 ENV HOME=/home/appuser
 ENV XDG_CACHE_HOME=/home/appuser/.cache
 ENV PRISMA_HOME_DIR=/home/appuser
 USER appuser
-ENTRYPOINT ["/app/.venv/bin/python", "/app/run_litellm_with_bedrock_mantle_refresh.py"]
+ENTRYPOINT ["/app/.venv/bin/python", "/app/run_litellm_with_bedrock_token_refresh.py"]
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD /app/.venv/bin/python -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=5)" || exit 1

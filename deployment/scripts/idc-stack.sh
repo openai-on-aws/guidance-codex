@@ -24,7 +24,7 @@ ALLOWED_BEDROCK_REGIONS="${ALLOWED_BEDROCK_REGIONS:-$AWS_REGION}"
 ALLOWED_MODEL_ID_PATTERN="${ALLOWED_MODEL_ID_PATTERN:-openai.gpt-*}"
 IDC_CLIENT_PROFILE="${IDC_CLIENT_PROFILE:-codex-bedrock-validation}"
 BEDROCK_TEST_MODEL="${BEDROCK_TEST_MODEL:-openai.gpt-oss-120b-1:0}"
-CODEX_MODEL="${CODEX_MODEL:-openai.gpt-5.5}"
+CODEX_MODEL="${CODEX_MODEL:-openai.gpt-5.6-sol}"
 if [[ -n "${AWS_CLI:-}" ]]; then
   :
 elif [[ -x /usr/local/bin/aws ]]; then

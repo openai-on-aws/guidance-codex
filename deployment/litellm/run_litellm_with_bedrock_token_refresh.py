@@ -13,7 +13,7 @@ from urllib.parse import quote_plus
 
 from aws_bedrock_token_generator import provide_token
 
-LOGGER = logging.getLogger("bedrock-mantle-refresh")
+LOGGER = logging.getLogger("bedrock-token-refresh")
 DEFAULT_REGION = "us-east-1"
 DEFAULT_REFRESH_INTERVAL_SECONDS = 300
 DEFAULT_FAILURE_RETRY_SECONDS = 30
@@ -47,7 +47,7 @@ def _unset_blank_aws_credentials() -> None:
 
 def _resolve_region() -> str:
     return (
-        os.environ.get("BEDROCK_MANTLE_REGION")
+        os.environ.get("BEDROCK_RUNTIME_REGION")
         or os.environ.get("AWS_REGION")
         or os.environ.get("AWS_DEFAULT_REGION")
         or DEFAULT_REGION
@@ -111,17 +111,22 @@ def _configure_prisma_runtime() -> None:
 def _refresh_bedrock_token() -> None:
     _unset_blank_aws_credentials()
     region = _resolve_region()
-    os.environ["BEDROCK_MANTLE_REGION"] = region
+    os.environ["BEDROCK_RUNTIME_REGION"] = region
     os.environ["AWS_REGION"] = region
     os.environ["AWS_DEFAULT_REGION"] = region
+    os.environ.setdefault(
+        "BEDROCK_RUNTIME_BASE_URL",
+        f"https://bedrock-runtime.{region}.amazonaws.com/openai/v1",
+    )
 
     token = provide_token()
     if not token:
         raise RuntimeError("aws-bedrock-token-generator returned an empty token")
 
     os.environ["AWS_BEARER_TOKEN_BEDROCK"] = token
-    # Keep the legacy env in sync for any LiteLLM internals that still read it.
-    os.environ["BEDROCK_MANTLE_API_KEY"] = token
+    # The GPT-5.6 deployments use LiteLLM's OpenAI Responses adapter. Leave
+    # api_key unset in config.yaml so the adapter reads this value per request.
+    os.environ["OPENAI_API_KEY"] = token
 
 
 def _validate_proxy_args(args: Iterable[str]) -> None:
@@ -147,7 +152,7 @@ def _token_refresh_loop(refresh_interval_seconds: int, failure_retry_seconds: in
             _refresh_bedrock_token()
             time.sleep(refresh_interval_seconds)
         except Exception:
-            LOGGER.exception("Failed to refresh the Bedrock Mantle bearer token")
+            LOGGER.exception("Failed to refresh the Bedrock bearer token")
             time.sleep(failure_retry_seconds)
 
 
@@ -171,13 +176,13 @@ def main(argv: list[str]) -> int:
 
     _configure_prisma_runtime()
     _refresh_bedrock_token()
-    LOGGER.info("Initialized refreshable Bedrock Mantle bearer token for region %s", _resolve_region())
+    LOGGER.info("Initialized refreshable Bedrock bearer token for region %s", _resolve_region())
 
     refresher = threading.Thread(
         target=_token_refresh_loop,
         args=(refresh_interval_seconds, failure_retry_seconds),
         daemon=True,
-        name="bedrock-mantle-token-refresh",
+        name="bedrock-token-refresh",
     )
     refresher.start()
 

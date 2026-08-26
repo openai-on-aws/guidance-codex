@@ -101,7 +101,7 @@ Deploy networking and optionally monitoring via CloudFormation:
 aws cloudformation deploy \
   --stack-name codex-networking \
   --template-file deployment/infrastructure/networking.yaml \
-  --region us-west-2
+  --region us-east-1
 ```
 
 **(Optional) Gateway telemetry.** On the gateway path, usage telemetry is the
@@ -132,7 +132,7 @@ use the gateway. Your admin provides the gateway URL (for LiteLLM, it's the
 ```toml
 # ~/.codex/config.toml
 model_provider = "my-gateway"
-model = "gpt-5.5"  # Prefer the latest GPT-5 family model your gateway exposes
+model = "gpt-5.6-sol"  # Prefer the latest GPT-5 family model your gateway exposes
 
 [model_providers.my-gateway]
 name = "My LLM Gateway"

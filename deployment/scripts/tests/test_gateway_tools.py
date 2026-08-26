@@ -4530,7 +4530,7 @@ class TestLiteLLMKeyProvisioning(unittest.TestCase):
             aws_cli="/usr/local/bin/aws",
             region="us-east-1",
             key_alias="codex-walkthrough",
-            models="gpt-5.5",
+            models="gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna",
             user_id=None,
             team_id=None,
             max_budget=None,

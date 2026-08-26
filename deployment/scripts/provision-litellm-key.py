@@ -145,7 +145,10 @@ def main() -> int:
     parser.add_argument("--aws-cli", required=True)
     parser.add_argument("--region", required=True)
     parser.add_argument("--key-alias", required=True)
-    parser.add_argument("--models", default="gpt-5.5")
+    parser.add_argument(
+        "--models",
+        default="gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna",
+    )
     parser.add_argument("--user-id")
     parser.add_argument("--team-id")
     parser.add_argument("--max-budget", type=float)
