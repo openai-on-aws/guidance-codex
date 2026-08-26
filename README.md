@@ -4,16 +4,17 @@ Reference access patterns for connecting [OpenAI Codex](https://developers.opena
 
 ---
 
-## Three Customer Rollout Paths
+## Choose a Rollout Path
 
 ```text
-Need hard budgets or centralized routing?
+Need centralized routing, hard budgets, or gateway policy?
 |
 |-- NO  -> Native AWS Access with IAM Identity Center
 |
-`-- YES -> Where should gateway control-plane operations live?
-           |-- Your AWS account -> LiteLLM on ECS
-           `-- Portkey managed  -> Portkey Hybrid on Amazon EKS
+`-- YES -> Which gateway operating model fits?
+           |-- Operate it in your AWS account     -> LiteLLM on ECS
+           `-- Portkey-managed control plane,
+               your AWS data plane                -> Portkey Hybrid on EKS
 ```
 
 | Path | Operations | Identity evidence | Best for |
@@ -27,20 +28,36 @@ The repository also retains an
 who specifically need AWS-managed routing, Bedrock Guardrails, or AWS-private
 web search.
 
-## What LiteLLM Does During a Task
+## Start Here
+
+- **Overview and decision guide** → [QUICKSTART.md](QUICKSTART.md)
+- **Native AWS Access** → [Quickstart](docs/QUICKSTART_NATIVE_AWS_ACCESS.md)
+- **LiteLLM on ECS** → [Deployable reference](docs/QUICKSTART_LLM_GATEWAY_LITELLM.md)
+- **Portkey Hybrid** → [Hybrid AWS deployment](docs/QUICKSTART_LLM_GATEWAY_PORTKEY.md)
+- **AgentCore Gateway** → [Specialized AWS-managed pattern](docs/QUICKSTART_AGENTCORE_GATEWAY.md)
+- **Gateway requirements** → [Pattern requirements](docs/QUICKSTART_LLM_GATEWAY.md)
+
+## Featured Reference: LiteLLM on ECS
+
+This repository documents multiple rollout paths. The remainder of this section
+highlights LiteLLM on ECS because it is the most complete deployable reference
+implementation. Use the links above for the Native AWS, Portkey, and AgentCore
+patterns.
+
+### How Requests Flow
 
 LiteLLM does not deploy or run Codex. Codex stays on the developer machine.
 For each turn, Codex sends a Responses request containing task context and tool
 definitions. LiteLLM authenticates the developer, applies model and budget
 policy, obtains upstream AWS credentials, and forwards the request to Bedrock
-Mantle. If the model requests a tool, Codex runs it locally and sends the result
-through LiteLLM in the next turn. That loop continues until the model returns a
-final response.
+Runtime. If the model requests a tool, Codex runs it locally and sends the
+result through LiteLLM in the next turn. That loop continues until the model
+returns a final response.
 
 ```text
-Codex -> /v1/responses -> LiteLLM policy -> Bedrock Mantle
-  ^                                              |
-  `----------- local tool result <--------------'
+Codex -> /v1/responses -> LiteLLM policy -> Bedrock Runtime
+  ^                                               |
+  `------------ local tool result <---------------'
 ```
 
 The value is the control point: developers retain the normal Codex experience,
@@ -49,7 +66,7 @@ budgets, and gateway telemetry.
 
 ![Codex request flow through LiteLLM on AWS](docs/assets/litellm-architecture.png)
 
-## Validated LiteLLM Walkthrough
+### Validated Walkthrough
 
 The LiteLLM reference was deployed and contract-tested in `us-east-1`. The
 walkthrough endpoint is CIDR-restricted and intentionally uses HTTP only;
@@ -65,10 +82,9 @@ LiteLLM master credential:
 
 ![LiteLLM administration login](docs/assets/litellm-admin-login.jpg)
 
-The administration UI confirms that the stable gateway aliases map to the
-approved Amazon Bedrock models:
+The checked-in configuration exposes these stable Bedrock Runtime aliases:
 
-![LiteLLM model aliases mapped to Amazon Bedrock models](docs/assets/litellm-model-endpoints.png)
+![Configured LiteLLM Bedrock Runtime model aliases](docs/assets/litellm-runtime-model-aliases.svg)
 
 After `codex exec` validation, LiteLLM records each Responses API turn with its
 status, scoped key alias, model, cost, and latency. Tool-using tasks create
@@ -86,50 +102,15 @@ through different public IP addresses. Keep each source restricted to an exact
 use trusted DNS, ACM, HTTPS on port 443, private ECS and database subnets, and
 the production settings in the quickstart.
 
-## What Portkey Does During a Task
+## Also Included: Portkey Hybrid
 
-Portkey Hybrid also keeps Codex on the developer workstation. Each Responses
-request uses customer private DNS and an approved corporate or VPN route to
-reach an internal Network Load Balancer. The NLB terminates ACM-backed TLS and
-forwards the request to the Portkey Enterprise gateway on Amazon EKS.
-
-The gateway applies the provider and model configuration received from
-Portkey. It uses its IRSA role to invoke the allowlisted Bedrock Mantle models
-and write request and response logs to the retained S3 bucket.
-
-```text
-Codex -> private DNS/VPN -> NLB TLS -> Portkey on EKS -> Bedrock Mantle
-  ^                                                              |
-  `-------------- model response / tool call <-------------------'
-```
-
-Redis remains cluster-internal. The gateway connects outbound to Portkey's
-managed control plane to synchronize configuration and send operational
-analytics metadata such as model choice, token counts, and latency. Prompt and
-response inference traffic uses the private NLB path. If the model requests a
-tool, Codex runs it locally and sends the result through that path on the next
-turn.
+Portkey Hybrid keeps the gateway data plane in your AWS account while Portkey
+manages the control plane. Codex reaches the EKS gateway through private
+DNS/VPN and an internal NLB; prompt and response inference traffic stays on
+that private path. See the [Portkey quickstart](docs/QUICKSTART_LLM_GATEWAY_PORTKEY.md)
+for the full deployment.
 
 ![Codex request flow through Portkey Hybrid on AWS](docs/assets/portkey-architecture.png)
-
-## Quick Start
-
-- **Overview & decision guide** → [QUICKSTART.md](QUICKSTART.md)
-- **Native AWS Access** → [Quickstart](docs/QUICKSTART_NATIVE_AWS_ACCESS.md)
-- **AgentCore Gateway** → [Quickstart](docs/QUICKSTART_AGENTCORE_GATEWAY.md)
-- **LiteLLM Gateway** → [Primary enterprise walkthrough](docs/QUICKSTART_LLM_GATEWAY_LITELLM.md)
-- **Portkey Gateway** → [Hybrid AWS deployment with Bedrock Mantle](docs/QUICKSTART_LLM_GATEWAY_PORTKEY.md)
-- **Gateway requirements** → [Pattern requirements](docs/QUICKSTART_LLM_GATEWAY.md)
-
-## Documentation
-
-- [Architecture & pattern comparison](docs/01-decide.md)
-- [Enterprise gateway evaluation](docs/ENTERPRISE_GATEWAY_GUIDANCE.md)
-- [Production deployment gates](docs/PRODUCTION_DEPLOYMENT.md)
-- [Monitoring & operations](docs/operate-monitoring.md)
-- [Troubleshooting](docs/operate-troubleshooting.md)
-- [CHANGELOG](CHANGELOG.md)
-
 ## Client tooling — Codex-native by design
 
 Authentication and telemetry both use features built into Codex.
@@ -202,6 +183,15 @@ logs, so attribute gateway metrics by team or org and join the rest downstream
 |-------------------|---------------|
 | [aws-oidc-auth/](https://github.com/aws-samples/sample-openai-on-aws/tree/main/aws-oidc-auth) | A `credential_process` helper for organizations that federate a raw OIDC IdP (Okta / Entra ID / Auth0 / Cognito) to AWS without IAM Identity Center. If you use IdC (`aws sso login`) or a gateway with OIDC bearer auth, the default paths already cover you. See [AUTH_HELPER.md](https://github.com/aws-samples/sample-openai-on-aws/blob/main/AUTH_HELPER.md). |
 | [deployment/scripts/codex-sso-creds*](deployment/scripts/) | For the Native AWS Access path: a `credential_process` helper script (bash + PowerShell) that makes IAM Identity Center login seamless — it auto-triggers `aws sso login` when the token expires, so the daily loop is just `codex`. Supports macOS, Linux, and Windows, including headless device-code hosts. See [credential-helper-auto-login.md](docs/credential-helper-auto-login.md). |
+
+## Documentation
+
+- [Architecture and pattern comparison](docs/01-decide.md)
+- [Enterprise gateway evaluation](docs/ENTERPRISE_GATEWAY_GUIDANCE.md)
+- [Production deployment gates](docs/PRODUCTION_DEPLOYMENT.md)
+- [Monitoring and operations](docs/operate-monitoring.md)
+- [Troubleshooting](docs/operate-troubleshooting.md)
+- [CHANGELOG](CHANGELOG.md)
 
 ## Contributing
 
