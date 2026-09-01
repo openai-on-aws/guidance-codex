@@ -89,7 +89,7 @@ echo "------------------------------------------------------------"
 # Codex emits delta-temporality metrics: a bare instant query returns empty at any
 # instant without a datapoint. Wrap in sum_over_time([1d]) so the check reliably
 # finds data emitted any time in the last 24h (matches the dashboard tile queries).
-PROM_QUERY='sum(histogram_sum(sum_over_time({"codex.turn.token_usage", "@instrumentation.@name"="codex"}[1d])))'
+PROM_QUERY='sum(histogram_sum(sum_over_time({"codex.turn.token_usage", token_type="total", "@instrumentation.@name"="codex"}[1d])))'
 PROM_URL="https://monitoring.${REGION}.amazonaws.com/api/v1/query"
 if command -v awscurl >/dev/null 2>&1; then
   echo "Querying: ${PROM_QUERY}"
