@@ -93,6 +93,12 @@ Metrics emitted by Codex ≥ 0.130:
 - `codex.thread.started`, `codex.thread.skills.*`.
 - `codex.shell_snapshot(.duration_ms)`, `codex.startup_prewarm.*`, `codex.plugins.startup_sync(.final)`, `codex.conversation.turn.count`.
 
+The token types are overlapping views, not additive buckets: `cached_input` is
+included in `input`, and `reasoning_output` is included in `output`. Use the
+emitted `total` series for totals and attribution. The dashboard shows the
+component series as unstacked lines so they can be inspected without implying
+that their sum is the token total.
+
 Codex automatically stamps resource attributes: `service.name` (e.g.
 `codex_exec`), `service.version`,
 `app.version`, `model`, `originator`, `session_source`, `os`. These become

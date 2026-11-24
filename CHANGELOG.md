@@ -44,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Codex token totals were double-counted in CloudWatch queries.** Total and
+  attribution widgets now use the emitted `token_type="total"` series instead
+  of adding overlapping input/cache and output/reasoning components. The OTEL
+  pipeline diagnostic uses the same total series, and the by-type chart is no
+  longer stacked.
 - **LiteLLM gateway metric attribution was silently dropped.** The collector
   lifted `user_email` / `user_id` / `team_id` / `model`, but LiteLLM emits these
   on metric datapoints as `metadata.user_api_key_*` / `gen_ai.request.model`.
